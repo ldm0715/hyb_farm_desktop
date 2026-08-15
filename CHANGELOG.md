@@ -4,6 +4,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本规范](https://semver.org/lang/zh-CN/)。
 
+## [0.1.1] - 2026-08-15
+
+### 修复
+
+- 修复 Windows Release 工作流中 `flutter_inappwebview_windows` 的 NuGet CLI 配置，确保依赖可在 GitHub Actions 中下载。
+
 ## [0.1.0] - 2026-08-15
 
 ### 新增
