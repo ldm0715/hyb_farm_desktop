@@ -37,11 +37,9 @@ add_definitions(-DUNICODE -D_UNICODE)
 # to plugins that use their own (non-apply_standard_settings) compile function.
 add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 
-# flutter_inappwebview_windows fetches its native deps (WIL, WebView2 SDK,
-# nlohmann.json) via nuget. Point find_program at the repo-bundled nuget.exe.
-get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-set(NUGET "${REPO_ROOT}/tools/nuget.exe" CACHE FILEPATH "Path to nuget.exe" FORCE)
-
+# flutter_inappwebview_windows fetches its native dependencies through NuGet.
+# Keep the lookup unforced so CMake resolves the `nuget` executable from PATH.
+# GitHub Actions provides it in .github/workflows/release-windows.yml.
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by

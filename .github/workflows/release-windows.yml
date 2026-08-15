@@ -26,6 +26,17 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Set up NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Verify NuGet CLI
+        shell: pwsh
+        run: |
+          $nuget = Get-Command nuget -ErrorAction Stop
+          & $nuget.Source help | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "NuGet CLI verification failed with exit code $LASTEXITCODE."
+          }
       - name: Verify tag and application version
         id: version
         shell: pwsh
