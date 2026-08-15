@@ -27,7 +27,7 @@ jobs:
           cache: true
 
       - name: Set up NuGet
-        uses: NuGet/setup-nuget@v2
+        uses: nuget/setup-nuget@v2
 
       - name: Verify NuGet CLI
         shell: pwsh

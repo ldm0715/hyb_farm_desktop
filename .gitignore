@@ -47,6 +47,9 @@ app.*.map.json
 # Local release artifacts
 /dist/
 
+# Local Inno Setup build tool (CI installs via choco)
+.tools/
+
 # Local secrets and Windows code-signing material
 .env
 .env.*

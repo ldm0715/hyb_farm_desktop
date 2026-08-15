@@ -27,7 +27,8 @@ VersionInfoVersion={#MyAppVersion}
 PrivilegesRequired=lowest
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; Keep this unofficial Inno Setup translation in the repository so CI does not depend on a global language pack.
+Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项："; Flags: unchecked
