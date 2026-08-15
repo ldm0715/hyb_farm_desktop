@@ -1,0 +1,7 @@
+{
+  "success": true,
+  "processed": 3,
+  "skipped": 4,
+  "energySpent": 15,
+  "byKind": { "thirsty": 2, "weed": 1, "pest": 0 }
+}

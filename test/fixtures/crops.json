@@ -1,0 +1,39 @@
+{
+  "success": true,
+  "crops": [
+    {
+      "id": "crop-1001",
+      "seedId": "pumpkin",
+      "seedName": "南瓜",
+      "seedImage": "/farm/crops/pumpkin",
+      "plantedAt": "2026-08-14T02:00:00.000Z",
+      "maturesAt": "2026-08-14T04:00:00.000Z",
+      "isHarvested": false,
+      "isMature": false,
+      "remainingTime": 1800,
+      "plotIndex": 0,
+      "conditions": [{ "kind": "thirsty" }]
+    },
+    {
+      "id": "crop-1002",
+      "seedId": "corn",
+      "seedName": "玉米",
+      "seedImage": "/farm/crops/corn",
+      "plantedAt": "2026-08-13T04:00:00.000Z",
+      "maturesAt": "2026-08-14T03:00:00.000Z",
+      "isHarvested": false,
+      "isMature": true,
+      "remainingTime": 0,
+      "plotIndex": 1,
+      "conditions": []
+    }
+  ],
+  "maxSlots": 6,
+  "baseSlots": 6,
+  "isVip": true,
+  "plotLevels": [
+    { "plotIndex": 0, "level": 2, "theme": "default" },
+    { "plotIndex": 1, "level": 1, "theme": "default" },
+    { "plotIndex": 2, "level": 1, "theme": "default" }
+  ]
+}

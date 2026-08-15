@@ -1,0 +1,167 @@
+name: Build and Release Windows
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build Windows release
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Verify tag and application version
+        id: version
+        shell: pwsh
+        run: |
+          $versionMatch = Select-String -Path 'pubspec.yaml' -Pattern '^version:\s*([^\s]+)' | Select-Object -First 1
+          if ($null -eq $versionMatch) {
+            throw 'Unable to read the version from pubspec.yaml.'
+          }
+
+          $pubspecVersion = $versionMatch.Matches[0].Groups[1].Value
+          $releaseVersion = $pubspecVersion.Split('+')[0]
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+
+          if ($env:GITHUB_REF_NAME -notmatch '^v' -or $tagVersion -ne $releaseVersion) {
+            throw "Tag '$env:GITHUB_REF_NAME' must match pubspec version '$releaseVersion' (for example: v$releaseVersion)."
+          }
+
+          "app_version=$releaseVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Extract release notes from changelog
+        env:
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        shell: pwsh
+        run: |
+          $content = [System.IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE 'CHANGELOG.md'))
+          $escapedVersion = [regex]::Escape($env:APP_VERSION)
+          $pattern = "(?ms)^## \[$escapedVersion\][^\r\n]*(?:\r?\n)(.*?)(?=^## \[|\z)"
+          $match = [regex]::Match($content, $pattern)
+
+          if (-not $match.Success) {
+            throw "CHANGELOG.md does not contain a section for version $env:APP_VERSION."
+          }
+
+          New-Item -ItemType Directory -Force -Path 'dist' | Out-Null
+          [System.IO.File]::WriteAllText(
+            (Join-Path $env:GITHUB_WORKSPACE 'dist\release-notes.md'),
+            $match.Value.Trim() + [Environment]::NewLine,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Create portable ZIP package
+        env:
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        shell: pwsh
+        run: |
+          $releaseDirectory = 'build\windows\x64\runner\Release'
+          if (-not (Test-Path -LiteralPath $releaseDirectory)) {
+            throw "Windows release directory was not found: $releaseDirectory"
+          }
+
+          $portablePackage = "dist\HYB-Farm-Desktop-$env:APP_VERSION-windows-x64-portable.zip"
+          Compress-Archive -Path "$releaseDirectory\*" -DestinationPath $portablePackage -Force
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Create Setup installer
+        env:
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            throw "Inno Setup compiler was not found: $iscc"
+          }
+
+          & $iscc "/DMyAppVersion=$env:APP_VERSION" 'installer\hyb_farm_desktop.iss'
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Create SHA-256 checksums
+        env:
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        shell: pwsh
+        run: |
+          $files = @(
+            "dist\HYB-Farm-Desktop-$env:APP_VERSION-Setup.exe",
+            "dist\HYB-Farm-Desktop-$env:APP_VERSION-windows-x64-portable.zip"
+          )
+
+          $checksums = foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file)) {
+              throw "Expected release asset was not found: $file"
+            }
+
+            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $(Split-Path -Leaf $file)"
+          }
+
+          [System.IO.File]::WriteAllLines(
+            "dist\HYB-Farm-Desktop-$env:APP_VERSION-SHA256.txt",
+            $checksums,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: HYB-Farm-Desktop-${{ steps.version.outputs.app_version }}-windows-x64
+          if-no-files-found: error
+          path: |
+            dist/HYB-Farm-Desktop-${{ steps.version.outputs.app_version }}-Setup.exe
+            dist/HYB-Farm-Desktop-${{ steps.version.outputs.app_version }}-windows-x64-portable.zip
+            dist/HYB-Farm-Desktop-${{ steps.version.outputs.app_version }}-SHA256.txt
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $assets = @(
+            "dist\HYB-Farm-Desktop-$env:APP_VERSION-Setup.exe",
+            "dist\HYB-Farm-Desktop-$env:APP_VERSION-windows-x64-portable.zip",
+            "dist\HYB-Farm-Desktop-$env:APP_VERSION-SHA256.txt"
+          )
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --title "HYB Farm Desktop $env:APP_VERSION" --notes-file 'dist\release-notes.md'
+            gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber $assets
+          } else {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --title "HYB Farm Desktop $env:APP_VERSION" --notes-file 'dist\release-notes.md' $assets
+          }

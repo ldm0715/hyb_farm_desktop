@@ -1,0 +1,9 @@
+{
+  "success": true,
+  "data": {
+    "plantedCount": 2,
+    "experience": 100,
+    "purchasedCount": 0,
+    "totalCost": "5000"
+  }
+}

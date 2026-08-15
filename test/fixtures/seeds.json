@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "data": {
+    "seeds": [
+      {
+        "id": "pumpkin",
+        "name": "南瓜",
+        "image": "/farm/crops/pumpkin",
+        "growthTime": 7200,
+        "harvestQuantity": 2,
+        "isVipOnly": false
+      },
+      {
+        "id": "starfruit",
+        "name": "杨桃",
+        "image": "/farm/crops/starfruit",
+        "growthTime": 14400,
+        "harvestQuantity": 4,
+        "isVipOnly": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "data": {
+    "seedId": "pumpkin",
+    "quantity": 2,
+    "unitPrice": "612581",
+    "totalQuota": "1225162",
+    "slippageBps": 0
+  }
+}

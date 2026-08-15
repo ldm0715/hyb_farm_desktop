@@ -1,0 +1,17 @@
+{
+  "success": true,
+  "data": [
+    {
+      "seedId": "pumpkin",
+      "recyclePrice": "612581"
+    },
+    {
+      "seedId": "corn",
+      "recyclePrice": "300000"
+    },
+    {
+      "seedId": "starfruit",
+      "recyclePrice": "900000"
+    }
+  ]
+}

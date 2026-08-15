@@ -1,0 +1,26 @@
+{
+  "success": true,
+  "data": [
+    {
+      "seedId": "pumpkin",
+      "seedName": "南瓜",
+      "seedImage": "/farm/crops/pumpkin",
+      "quantity": 12,
+      "recyclePrice": "612581"
+    },
+    {
+      "seedId": "corn",
+      "seedName": "玉米",
+      "seedImage": "/farm/crops/corn",
+      "quantity": 0,
+      "recyclePrice": "300000"
+    },
+    {
+      "seedId": "starfruit",
+      "seedName": "杨桃",
+      "seedImage": "/farm/crops/starfruit",
+      "quantity": 5,
+      "recyclePrice": "900000"
+    }
+  ]
+}

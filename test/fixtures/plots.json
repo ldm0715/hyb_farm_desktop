@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "data": {
+    "totalSlots": 6,
+    "freeSlots": 3,
+    "unlockedSlots": 6,
+    "vipBonusSlots": 2,
+    "maxUnlockable": 10
+  }
+}
