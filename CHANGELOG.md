@@ -6,12 +6,6 @@
 
 ## [0.1.1] - 2026-08-15
 
-### 修复
-
-- 修复 Windows Release 工作流中 `flutter_inappwebview_windows` 的 NuGet CLI 配置，确保依赖可在 GitHub Actions 中下载。
-
-## [0.1.0] - 2026-08-15
-
 ### 新增
 
 - 基于 Flutter 的 Windows 桌面应用，采用紧凑无边框控制面板，并支持系统托盘常驻。
@@ -25,3 +19,7 @@
 - 浅色 / 暗色主题、设置持久化、窗口位置记忆，以及可选的鼠标移出后隐藏到托盘。
 - 登录失效、网络异常、请求限流与 Cloudflare 人机验证等连接状态处理。
 - API 模型、服务、状态管理、格式化与界面组件的单元测试和 Widget 测试。
+
+### 修复
+
+- 修复 Windows Release 工作流中 `flutter_inappwebview_windows` 的 NuGet CLI 配置，确保依赖可在 GitHub Actions 中下载。
