@@ -93,9 +93,14 @@ class ApiClient {
 
   void setCookie(String? value) => cookie = value;
 
-  /// GET：按完整 URL 去重，返回已解包的 data（或整个 map，取决于响应结构）。
+  /// 追加 dio 拦截器（如网络日志）。在发请求前调用，保持 ApiClient 不依赖日志模块。
+  void addInterceptor(Interceptor interceptor) =>
+      _dio.interceptors.add(interceptor);
+
+  /// GET：按完整 URL（含稳定序列化的 query）去重，返回已解包的 data（或整个 map，
+  /// 取决于响应结构）。key 纳入 query，避免带不同 query 的同 path 请求误共享。
   Future<dynamic> get(String path, {Map<String, dynamic>? query}) {
-    final url = _dio.options.baseUrl + path;
+    final url = _dio.options.baseUrl + path + _stableQuery(query);
     final existing = _inflightGet[url];
     if (existing != null) return existing;
 
@@ -104,6 +109,14 @@ class ApiClient {
     // whenComplete 返回的 future 会继承原 future 的错误，忽略它避免未处理异步异常。
     future.whenComplete(() => _inflightGet.remove(url)).ignore();
     return future;
+  }
+
+  /// query 稳定序列化：key 排序后拼成 `?k=v&...`，保证同参数顺序一致的去重 key。
+  static String _stableQuery(Map<String, dynamic>? query) {
+    if (query == null || query.isEmpty) return '';
+    final keys = query.keys.toList()..sort();
+    final parts = keys.map((k) => '$k=${query[k]}').toList();
+    return '?${parts.join('&')}';
   }
 
   /// POST：不去重，不通过通用重试器盲目重放。

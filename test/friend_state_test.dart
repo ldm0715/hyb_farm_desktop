@@ -78,16 +78,29 @@ void main() {
     expect(state.statuses.first.id, 'b'); // 可偷排最前
   });
 
-  test('refresh 30s 内复用详情缓存', () async {
+  test('refresh 5min TTL 内复用列表缓存，2min 内复用详情缓存', () async {
     final api = _FakeApi([_friend('a')])..farms = {'a': _farm('a')};
     final state = FriendState(api: api, coordinator: OperationCoordinator());
 
     await state.refresh();
+    final listAfterFirst = api.listCalls;
     final detailsAfterFirst = api.detailCalls;
+    // 第二次 refresh 在列表 TTL（5min）与详情 TTL（2min）内：两者都复用缓存。
     await state.refresh();
 
-    expect(api.listCalls, 2); // 列表始终重拉
-    expect(api.detailCalls, detailsAfterFirst); // 详情命中缓存
+    expect(api.listCalls, listAfterFirst); // 列表命中 5min TTL
+    expect(api.detailCalls, detailsAfterFirst); // 详情命中 2min TTL
+  });
+
+  test('refresh(force:true) 绕过列表 TTL 重拉', () async {
+    final api = _FakeApi([_friend('a')])..farms = {'a': _farm('a')};
+    final state = FriendState(api: api, coordinator: OperationCoordinator());
+
+    await state.refresh();
+    final listAfterFirst = api.listCalls;
+    await state.refresh(force: true);
+
+    expect(api.listCalls, listAfterFirst + 1); // force 绕过 5min TTL
   });
 
   test('分页：pageSize=5，第二页只加载对应好友详情', () async {

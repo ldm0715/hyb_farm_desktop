@@ -52,6 +52,14 @@ class Crop {
   /// 是否已成熟（isMature 或剩余时间已耗尽）。
   bool get mature => isMature || remainingTime <= 0;
 
+  /// 截至 [now] 是否已成熟。剩余秒数 [remainingTime] 是后端请求时刻的快照、
+  /// 不随墙钟自减，到点收菜时仍可能是旧值；用绝对成熟时刻 [maturesAt] 兜底，
+  /// 镜像油猴脚本 `getLiveCrop` 的实时成熟重算。
+  bool matureAt(DateTime now) =>
+      isMature ||
+      remainingTime <= 0 ||
+      (maturesAt != null && !maturesAt!.isAfter(now));
+
   /// 是否存在 debuff（缺水/杂草/虫害）。
   bool get hasDebuff => conditions.isNotEmpty;
 
@@ -355,17 +363,34 @@ class FriendSummary {
     required this.id,
     required this.username,
     this.avatar = '',
+    this.isStealable = false,
+    this.ripeCount = 0,
+    this.stealableCount = 0,
   });
 
   final String id;
   final String username;
   final String avatar;
 
-  factory FriendSummary.fromJson(Map<String, dynamic> json) => FriendSummary(
-    id: json['id'] as String? ?? '',
-    username: json['username'] as String? ?? '未知好友',
-    avatar: json['avatar'] as String? ?? '',
-  );
+  /// 列表接口的 stealable 摘要（仅预筛用，最终判定以详情第一块地为准）。
+  final bool isStealable;
+  final int ripeCount;
+  final int stealableCount;
+
+  factory FriendSummary.fromJson(Map<String, dynamic> json) {
+    final stealable = json['stealable'];
+    final s = stealable is Map<String, dynamic>
+        ? stealable
+        : const <String, dynamic>{};
+    return FriendSummary(
+      id: json['id'] as String? ?? '',
+      username: json['username'] as String? ?? '未知好友',
+      avatar: json['avatar'] as String? ?? '',
+      isStealable: s['isStealable'] as bool? ?? false,
+      ripeCount: (s['ripeCount'] as num?)?.toInt() ?? 0,
+      stealableCount: (s['stealableCount'] as num?)?.toInt() ?? 0,
+    );
+  }
 }
 
 /// 当前登录用户信息（`/api/user/info` 的 `data.user`）。

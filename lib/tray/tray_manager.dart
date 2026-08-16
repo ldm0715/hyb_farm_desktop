@@ -3,11 +3,11 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:system_tray/system_tray.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:hyb_farm_desktop/core/farm_connection_state.dart';
 import 'package:hyb_farm_desktop/core/formatters.dart';
+import 'package:hyb_farm_desktop/core/log/app_logger.dart';
 import 'package:hyb_farm_desktop/state/connection_state_store.dart';
 import 'package:hyb_farm_desktop/state/farm_state.dart';
 import 'package:hyb_farm_desktop/state/settings_state.dart';
@@ -51,7 +51,7 @@ class TrayManager extends WindowListener {
         _updateStatus();
       });
     } catch (e) {
-      debugPrint('tray init failed: $e');
+      AppLog.e('Tray', 'tray init failed', error: e);
     }
   }
 

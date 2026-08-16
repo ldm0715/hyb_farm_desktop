@@ -16,8 +16,28 @@ const Duration kRequestTimeout = Duration(seconds: 15);
 /// 收菜成功后延迟补种的等待时长。
 const Duration kReplantDelay = Duration(seconds: 10);
 
-/// 调度器兜底检查间隔。
-const Duration kFallbackPollInterval = Duration(seconds: 30);
+/// 调度器兜底检查间隔（成熟 Timer 漏触发 / 系统休眠恢复 / 网络失败恢复）。
+const Duration kHarvestFallbackInterval = Duration(minutes: 5);
+
+/// 成熟到点后的触发延迟：仅补服务端时钟偏差，毫秒级，避免被偷菜。
+const Duration kHarvestTriggerDelay = Duration(milliseconds: 500);
+
+/// 资源缓存 TTL（值 + 时间戳，决定何时可复用缓存）。
+const Duration kPlotsCacheTtl = Duration(minutes: 5);
+const Duration kInventoryCacheTtl = Duration(minutes: 5);
+const Duration kSeedsCacheTtl = Duration(hours: 24);
+const Duration kPricesCacheTtl = Duration(minutes: 30);
+const Duration kFriendsListCacheTtl = Duration(minutes: 5);
+
+/// 资源请求最小间隔（决定两次实际请求之间的最短间隔，失败也更新）。
+const Duration kMinRequestInterval = Duration(seconds: 15);
+
+/// 请求失败退避：指数 1min × 2^n，上限 30min。
+const Duration kBackoffBaseDelay = Duration(minutes: 1);
+const Duration kBackoffMaxDelay = Duration(minutes: 30);
+
+/// 回前台距上次成功刷新超过此时长才强制刷新（保留阈值语义）。
+const Duration kBackgroundResumeThreshold = Duration(minutes: 2);
 
 /// 作物图标文件名后缀。
 const String kCropIconSuffix = '_s4.png';
@@ -28,11 +48,11 @@ const Duration kStealCooldown = Duration(seconds: 5);
 /// 好友列表分页大小。
 const int kFriendsPageSize = 5;
 
-/// 好友详情缓存时长。
-const Duration kFriendDetailCache = Duration(seconds: 30);
+/// 好友详情缓存时长（详情放大治理：可偷态只在成熟瞬间翻转一次）。
+const Duration kFriendDetailCache = Duration(minutes: 2);
 
 /// 应用版本号（展示于设置页「关于与数据」，需与 pubspec.yaml 的 version 手动同步）。
-const String kAppVersion = '0.1.0';
+const String kAppVersion = '0.1.2';
 
 /// 拼接作物图标完整地址。
 String cropIconUrl(String seedImage) => '$kBaseUrl$seedImage$kCropIconSuffix';

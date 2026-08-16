@@ -4,6 +4,17 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本规范](https://semver.org/lang/zh-CN/)。
 
+## [0.1.2] - 2026-08-16
+
+### 新增
+
+- 按日期滚动的文件日志系统：`AppLog` 统一入口（dev/staging/production 三环境）、写盘前脱敏 Cookie/Token/查询参数、dio 网络日志拦截器与全局异常捕获。
+- 请求频率治理：`ResourceCache`（TTL/最小间隔/single-flight）+ `RequestBackoff`（网络全局 / 429 Retry-After / 5xx 按端点指数退避）+ 精确定时收菜，替代固定 30 秒全量轮询。
+
+### 修复
+
+- 修复自动收菜统计漏记：改用 `Crop.matureAt(now)` 绝对成熟时刻重算（接口 `remainingTime` 是快照、不随墙钟自减）。
+
 ## [0.1.1] - 2026-08-15
 
 ### 新增

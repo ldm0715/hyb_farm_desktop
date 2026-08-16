@@ -108,15 +108,19 @@ void main() {
     expect(result.totalCost, '500');
   });
 
-  test('fetchRecyclePrices 取 data 数组', () async {
+  test('fetchPrices 合并 data[] 与 market.items[] 为一次请求派生两份', () async {
     final api = _api({
       '/api/farm/recycle/prices':
-          '{"success":true,"data":[{"seedId":"p","recyclePrice":"612581"}]}',
+          '{"success":true,"data":[{"seedId":"a","recyclePrice":"612581"}],"market":{"items":[{"seedId":"b","unitPrice":"300000"},{"seedId":"a","unitPrice":"999999"}]}}',
     });
-    final prices = await api.fetchRecyclePrices();
-    expect(prices.length, 1);
-    expect(prices.first.seedId, 'p');
-    expect(prices.first.recyclePriceInt, 612581);
+    final prices = await api.fetchPrices();
+    // recyclePrices 取 data[]。
+    expect(prices.recyclePrices.length, 1);
+    expect(prices.recyclePrices.first.seedId, 'a');
+    expect(prices.recyclePrices.first.recyclePriceInt, 612581);
+    // unitPrices：market.items 覆盖 data 的同 seedId 值；data 直接价与 market 并存。
+    expect(prices.unitPrices['a'], 999999);
+    expect(prices.unitPrices['b'], 300000);
   });
 
   test('recycleQuote 取 data 对象', () async {
@@ -149,17 +153,6 @@ void main() {
     expect(body['maxSlippageBps'], 300);
   });
 
-  test('fetchUnitPrices 合并 data[] 与 market.items[]', () async {
-    final api = _api({
-      '/api/farm/recycle/prices':
-          '{"success":true,"data":[{"seedId":"a","recyclePrice":"612581"}],"market":{"items":[{"seedId":"b","unitPrice":"300000"},{"seedId":"a","unitPrice":"999999"}]}}',
-    });
-    final prices = await api.fetchUnitPrices();
-    // market.items 覆盖 data 的同 seedId 值；data 直接价与 market 并存。
-    expect(prices['a'], 999999);
-    expect(prices['b'], 300000);
-  });
-
   test('fetchFriendsStealable 取 data.friends 数组', () async {
     final api = _api({
       '/api/farm/friends/stealable':
@@ -170,6 +163,17 @@ void main() {
     expect(friends.first.id, 'f1');
     expect(friends.first.username, '小明');
     expect(friends.last.username, '小红');
+  });
+
+  test('fetchFriendsStealable 解析 stealable 摘要字段', () async {
+    final api = _api({
+      '/api/farm/friends/stealable':
+          '{"success":true,"data":{"friends":[{"id":"f1","username":"小明","stealable":{"isStealable":true,"ripeCount":2,"stealableCount":5}}]}}',
+    });
+    final friends = await api.fetchFriendsStealable();
+    expect(friends.single.isStealable, isTrue);
+    expect(friends.single.ripeCount, 2);
+    expect(friends.single.stealableCount, 5);
   });
 
   test('fetchFriendFarm 取 data 对象并按第一块地判定可偷', () async {

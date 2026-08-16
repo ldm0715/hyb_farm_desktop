@@ -73,7 +73,7 @@ class _WarehousePageState extends State<WarehousePage> {
     setState(() => _busy = true);
     try {
       final messages = await recycle.sellSelected(entries);
-      await farmState.refresh();
+      await farmState.refreshInventory(force: true);
       setState(() => _selected.clear());
       messenger.showSnackBar(
         SnackBar(
@@ -119,7 +119,8 @@ class _WarehousePageState extends State<WarehousePage> {
               : '种植 ${e.seedName} 失败（空地/库存不足）',
         );
       }
-      await farmState.refresh();
+      await farmState.refreshCrops(force: true);
+      await farmState.refreshInventory(force: true);
       setState(() => _selected.clear());
       messenger.showSnackBar(SnackBar(content: Text(messages.join('\n'))));
     } on AuthExpiredException {

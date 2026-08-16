@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:hyb_farm_desktop/api/api_client.dart';
 import 'package:hyb_farm_desktop/api/farm_api.dart';
 import 'package:hyb_farm_desktop/core/operation_coordinator.dart';
+import 'package:hyb_farm_desktop/core/request_backoff.dart';
 import 'package:hyb_farm_desktop/services/care_log.dart';
 import 'package:hyb_farm_desktop/state/connection_state_store.dart';
 import 'package:hyb_farm_desktop/state/farm_state.dart';
@@ -20,12 +21,14 @@ class AutoCareService extends ChangeNotifier {
     required OperationCoordinator coordinator,
     required CareLog careLog,
     required ConnectionStateStore connectionStore,
+    RequestBackoff? backoff,
     DateTime Function() now = DateTime.now,
   }) : _api = api,
        _farmState = farmState,
        _coordinator = coordinator,
        _careLog = careLog,
        _connectionStore = connectionStore,
+       _backoff = backoff ?? RequestBackoff(),
        _now = now;
 
   final FarmApi _api;
@@ -33,7 +36,11 @@ class AutoCareService extends ChangeNotifier {
   final OperationCoordinator _coordinator;
   final CareLog _careLog;
   final ConnectionStateStore _connectionStore;
+  final RequestBackoff _backoff;
   final DateTime Function() _now;
+
+  /// 务农写请求的退避门控键。
+  static const _careKey = '/api/farm/care/all';
 
   Timer? _timer;
   int? _intervalMinutes;
@@ -79,9 +86,9 @@ class AutoCareService extends ChangeNotifier {
     if (!_connectionStore.canRunAutomation) return;
 
     // 先刷新拿最新快照再判 debuff：内存里的 crops 是上次 fetch 的静态快照，
-    // 若只有自动务农、没有自动收菜的 30s 轮询去喂数据，debuff 会永远不被「看见」。
+    // 若只有自动务农、没有自动收菜的轮询去喂数据，debuff 会永远不被「看见」。
     try {
-      await _farmState.refresh();
+      await _farmState.refreshCrops(force: true);
     } on AuthExpiredException {
       _farmState.setLastResult('登录已失效');
       return;
@@ -91,6 +98,9 @@ class AutoCareService extends ChangeNotifier {
     }
 
     if (!_farmState.hasDebuff) return;
+    // 务农写请求纳入退避：退避期内不重试，等待下一次务农 tick。
+    if (!_backoff.allowedAt(_careKey, _now())) return;
+
     await _coordinator.run(() async {
       try {
         final result = await _api.careAll();
@@ -102,7 +112,7 @@ class AutoCareService extends ChangeNotifier {
         } on Exception {
           // 统计记录失败不影响主流程。
         }
-        await _farmState.refresh();
+        await _farmState.refreshCrops(force: true);
       } on AuthExpiredException {
         _farmState.setLastResult('登录已失效');
       } on Exception catch (e) {

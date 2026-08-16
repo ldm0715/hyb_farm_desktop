@@ -31,7 +31,8 @@ class _FakeFarmApi extends FarmApi {
   Future<List<InventoryItem>> fetchInventory() async => inventory;
 
   @override
-  Future<List<RecyclePrice>> fetchRecyclePrices() async => recyclePrices;
+  Future<FarmPrices> fetchPrices() async =>
+      FarmPrices(recyclePrices: recyclePrices, unitPrices: const {});
 }
 
 Crop _crop({
@@ -168,7 +169,7 @@ void main() {
     expect(state.inventoryTotalValue, 12 * 612581 + 5 * 900000);
   });
 
-  test('fetchRecyclePrices 缓存实时回收价并映射 seedId', () async {
+  test('loadPrices 缓存实时回收价并映射 seedId', () async {
     final api = _FakeFarmApi(
       recyclePrices: const [
         RecyclePrice(seedId: 'pumpkin', recyclePrice: '612581'),
@@ -177,7 +178,7 @@ void main() {
     );
     final state = FarmState(api);
 
-    await state.fetchRecyclePrices();
+    await state.loadPrices();
 
     expect(state.recyclePrices.length, 2);
     expect(state.recyclePriceBySeedId['pumpkin'], 612581);

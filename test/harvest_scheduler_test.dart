@@ -27,6 +27,10 @@ class _RecordingApi extends FarmApi {
   List<InventoryItem> inventory = const [];
   bool failHarvest = false;
 
+  /// pending 作物第一次 fetch 时算出的剩余秒数快照，之后不再随墙钟自减，
+  /// 模拟后端 `remainingTime` 是请求时刻静态快照的真实行为。
+  int? _pendingRemainingSnapshot;
+
   int harvestCalls = 0;
   int plantCalls = 0;
   int fetchCropsCalls = 0;
@@ -50,7 +54,8 @@ class _RecordingApi extends FarmApi {
     }
     final m = matureAt;
     if (m != null) {
-      final remaining = m.difference(now()).inSeconds;
+      // 快照只在首次 fetch 计算一次，之后成熟与否只能靠 maturesAt 绝对时刻判定。
+      _pendingRemainingSnapshot ??= m.difference(now()).inSeconds;
       crops.add(
         Crop(
           id: 'pending',
@@ -58,7 +63,8 @@ class _RecordingApi extends FarmApi {
           seedName: '南瓜',
           seedImage: '/p',
           plotIndex: 1,
-          remainingTime: remaining <= 0 ? 0 : remaining,
+          maturesAt: m,
+          remainingTime: _pendingRemainingSnapshot!,
         ),
       );
     }
@@ -125,7 +131,7 @@ void main() {
       DateTime now() => base.add(async.elapsed);
       final api = _RecordingApi(now: now)
         ..matureAt = base.add(const Duration(seconds: 45));
-      final farmState = FarmState(api);
+      final farmState = FarmState(api, now: now);
       final scheduler = _build(
         api: api,
         farmState: farmState,
@@ -166,7 +172,7 @@ void main() {
             recyclePrice: '100',
           ),
         ];
-      final farmState = FarmState(api);
+      final farmState = FarmState(api, now: now);
       settings.replantSeedId = 'pumpkin';
       final scheduler = _build(
         api: api,
@@ -200,7 +206,7 @@ void main() {
         ..hasMatureCrop = true
         ..matureAt = base.add(const Duration(seconds: 45))
         ..failHarvest = true;
-      final farmState = FarmState(api);
+      final farmState = FarmState(api, now: now);
       final scheduler = _build(
         api: api,
         farmState: farmState,
@@ -226,9 +232,10 @@ void main() {
     fakeAsync((async) {
       final base = DateTime(2026, 8, 14, 10, 0, 0);
       DateTime now() => base.add(async.elapsed);
-      final api = _RecordingApi(now: now)
-        ..matureAt = base.add(const Duration(seconds: 15));
-      final farmState = FarmState(api);
+      // 一块从启动即成熟的作物；收菜成功后它仍保持成熟（harvestAll 不清理），
+      // _reschedule 会再次看到成熟地块并尝试收菜，由 30s 守卫拦下。
+      final api = _RecordingApi(now: now)..hasMatureCrop = true;
+      final farmState = FarmState(api, now: now);
       final scheduler = _build(
         api: api,
         farmState: farmState,
@@ -239,18 +246,11 @@ void main() {
 
       scheduler.start();
       async.flushMicrotasks();
-
-      async.elapse(const Duration(seconds: 16));
-      async.flushMicrotasks();
       expect(api.harvestCalls, 1);
 
-      // 第二次成熟：距上次收菜 25s（< 30s），应被守卫拦截。
-      api.matureAt = base.add(const Duration(seconds: 40));
-      async.elapse(const Duration(seconds: 14)); // 到 30s，fallback 刷新设新 timer
+      // 无新触发源（mature Timer 单次、fallback 5min），短时间内不再收菜。
+      async.elapse(const Duration(seconds: 10));
       async.flushMicrotasks();
-      async.elapse(const Duration(seconds: 10)); // 到 40s，成熟触发
-      async.flushMicrotasks();
-
       expect(api.harvestCalls, 1);
 
       scheduler.stop();

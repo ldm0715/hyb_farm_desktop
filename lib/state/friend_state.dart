@@ -1,4 +1,4 @@
-/// 好友农场状态：列表、分页、详情 30s 缓存、偷菜流程与冷却。
+/// 好友农场状态：列表、分页、详情 2min 缓存、偷菜流程与冷却。
 library;
 
 import 'package:flutter/foundation.dart';
@@ -7,19 +7,29 @@ import 'package:hyb_farm_desktop/api/farm_api.dart';
 import 'package:hyb_farm_desktop/api/models.dart';
 import 'package:hyb_farm_desktop/core/constants.dart';
 import 'package:hyb_farm_desktop/core/operation_coordinator.dart';
+import 'package:hyb_farm_desktop/core/resource_cache.dart';
 
 /// 偷菜结果提示类型。
 enum StealNoticeType { success, error }
 
 class FriendState extends ChangeNotifier {
-  FriendState({required FarmApi api, required OperationCoordinator coordinator})
-    : _api = api,
-      _coordinator = coordinator;
+  FriendState({
+    required FarmApi api,
+    required OperationCoordinator coordinator,
+    DateTime Function()? now,
+  }) : _api = api,
+       _coordinator = coordinator,
+       _listCache = ResourceCache<List<FriendSummary>>(
+         ttl: kFriendsListCacheTtl,
+         minInterval: kMinRequestInterval,
+         fetch: api.fetchFriendsStealable,
+         now: now,
+       );
 
   final FarmApi _api;
   final OperationCoordinator _coordinator;
+  final ResourceCache<List<FriendSummary>> _listCache;
 
-  List<FriendSummary> _friends = const [];
   List<FriendFarm> _statuses = const [];
   int _page = 1;
   bool _loading = false;
@@ -30,10 +40,15 @@ class FriendState extends ChangeNotifier {
   final Map<String, ({FriendFarm status, DateTime fetchedAt})> _detailCache =
       {};
 
+  /// 按 friendId 的详情 in-flight 复用（single-flight：同好友并发拉详情复用同一 Future）。
+  final Map<String, Future<FriendFarm>> _detailInFlight = {};
+
   List<FriendFarm> get statuses => _statuses;
   int get page => _page;
   int get totalPages =>
-      _friends.isEmpty ? 1 : (_friends.length / kFriendsPageSize).ceil();
+      (_listCache.value ?? const []).isEmpty
+          ? 1
+          : (_listCache.value!.length / kFriendsPageSize).ceil();
   bool get loading => _loading;
   String? get stealingFriendId => _stealingFriendId;
   String? get stealNotice => _stealNotice;
@@ -50,24 +65,25 @@ class FriendState extends ChangeNotifier {
   bool get isStealCoolingDown => stealCooldownRemainingSeconds > 0;
 
   /// 拉取好友列表并按当前页加载详情；列表失败/为空时清空状态。
-  Future<void> refresh({bool forceDetails = false}) async {
+  /// [force] 强制重拉列表（绕过 5min TTL），手动刷新按钮用；切 tab 默认 false。
+  Future<void> refresh({bool force = false}) async {
     _loading = true;
     notifyListeners();
     try {
-      final friends = await _api.fetchFriendsStealable();
-      _friends = friends;
+      final friends = await _listCache.get(force: force);
 
       final total = totalPages;
       if (_page > total) _page = total;
 
       final start = (_page - 1) * kFriendsPageSize;
       final pageFriends = friends.skip(start).take(kFriendsPageSize).toList();
-      final statuses = await _fetchDetails(pageFriends, force: forceDetails);
+      final statuses = await _fetchDetails(pageFriends);
       _statuses = _sort(statuses);
     } on AuthExpiredException {
       rethrow;
+    } on ResourceThrottledException {
+      // 无列表缓存 + 首次失败 + 间隔内重试：保留现有状态，不伪装为空。
     } on Exception {
-      _friends = const [];
       _statuses = const [];
     } finally {
       _loading = false;
@@ -75,13 +91,26 @@ class FriendState extends ChangeNotifier {
     }
   }
 
-  /// 并发（最多 3）拉取当前页好友详情，命中 30s 缓存则复用。
-  Future<List<FriendFarm>> _fetchDetails(
-    List<FriendSummary> friends, {
-    bool force = false,
-  }) async {
+  /// 并发（最多 3）拉取当前页好友详情，命中 2min 缓存则复用；
+  /// 同 friendId 并发拉取复用同一 in-flight Future。
+  Future<List<FriendFarm>> _fetchDetails(List<FriendSummary> friends) async {
     final results = List<FriendFarm?>.filled(friends.length, null);
     var next = 0;
+
+    Future<FriendFarm> fetchDetail(FriendSummary friend) {
+      final inflight = _detailInFlight[friend.id];
+      if (inflight != null) return inflight;
+      final future = _api.fetchFriendFarm(friend.id).then((status) {
+        _detailCache[friend.id] = (status: status, fetchedAt: DateTime.now());
+        return status;
+      }).whenComplete(() {
+        // 用代码块返回 void：若写成 `=> _detailInFlight.remove(...)`，
+        // 箭头会返回被移除的 Future 值，whenComplete 会 await 它 → 自死锁。
+        _detailInFlight.remove(friend.id);
+      });
+      _detailInFlight[friend.id] = future;
+      return future;
+    }
 
     Future<void> worker() async {
       while (true) {
@@ -89,16 +118,14 @@ class FriendState extends ChangeNotifier {
         if (index >= friends.length) return;
         final friend = friends[index];
 
-        final cached = force ? null : _detailCache[friend.id];
+        final cached = _detailCache[friend.id];
         if (cached != null &&
             DateTime.now().difference(cached.fetchedAt) < kFriendDetailCache) {
           results[index] = cached.status;
           continue;
         }
 
-        final status = await _api.fetchFriendFarm(friend.id);
-        _detailCache[friend.id] = (status: status, fetchedAt: DateTime.now());
-        results[index] = status;
+        results[index] = await fetchDetail(friend);
       }
     }
 
@@ -151,7 +178,8 @@ class FriendState extends ChangeNotifier {
       final result = await _coordinator.run(() => _api.stealFriend(friendId));
       _detailCache.remove(friendId);
       try {
-        await refresh();
+        // 偷菜改变了好友可偷态，force 重拉列表（绕过 5min TTL）。
+        await refresh(force: true);
       } on Exception {
         // 偷菜已成功，刷新失败不覆盖成功提示。
       }
@@ -164,7 +192,7 @@ class FriendState extends ChangeNotifier {
     } on ApiBusinessException catch (e) {
       _detailCache.remove(friendId);
       try {
-        await refresh();
+        await refresh(force: true);
       } on Exception {
         // 业务失败提示优先，刷新失败不覆盖。
       }

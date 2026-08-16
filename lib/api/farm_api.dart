@@ -66,8 +66,10 @@ class FarmApi {
     return CareAllResult.fromJson(_asMap(json));
   }
 
-  /// 实时回收价格。`{ data: [RecyclePrice...] }`，另有可选的 market 字段。
-  Future<List<RecyclePrice>> fetchRecyclePrices() async {
+  /// 实时价格（一次请求派生两份）：`data[]`（recyclePrice）与 `market.items[]`
+  /// （unitPrice）。原 fetchRecyclePrices 与 fetchUnitPrices 打同一 URL 同一参数，
+  /// 合并为单次请求，避免仓库页与收益排行重复拉取。
+  Future<FarmPrices> fetchPrices() async {
     final json = await _client.get(
       '/api/farm/recycle/prices',
       query: const {
@@ -76,13 +78,38 @@ class FarmApi {
         'trendRange': '7',
       },
     );
-    final list = json is List
-        ? json
-        : _asMap(json)['data'] as List? ?? const [];
-    return list
+    final map = _asMap(json);
+
+    final direct = map['data'] is List
+        ? map['data'] as List
+        : const <dynamic>[];
+    final recyclePrices = direct
         .whereType<Map<String, dynamic>>()
         .map(RecyclePrice.fromJson)
         .toList();
+
+    final unitPrices = <String, int>{};
+    for (final p in recyclePrices) {
+      if (p.seedId.isNotEmpty && p.recyclePriceInt > 0) {
+        unitPrices[p.seedId] = p.recyclePriceInt;
+      }
+    }
+
+    final market = map['market'] is Map<String, dynamic>
+        ? (map['market'] as Map<String, dynamic>)['items']
+        : null;
+    final items = market is List ? market : const <dynamic>[];
+    for (final item in items.whereType<Map<String, dynamic>>()) {
+      final m = MarketItem.fromJson(item);
+      if (m.seedId.isNotEmpty && m.unitPriceInt > 0) {
+        unitPrices[m.seedId] = m.unitPriceInt;
+      }
+    }
+
+    return FarmPrices(
+      recyclePrices: recyclePrices,
+      unitPrices: unitPrices,
+    );
   }
 
   /// 回收报价。`{ data: { seedId, quantity, unitPrice, totalQuota, quotedAt } }`。
@@ -110,43 +137,6 @@ class FarmApi {
       },
     );
     return RecycleResult.fromJson(_dataMap(_asMap(json)));
-  }
-
-  /// 实时单价映射（seedId → 原始整数），合并 `data[]`（recyclePrice）与
-  /// `market.items[]`（unitPrice），供收益排行用。不改变 [fetchRecyclePrices]。
-  Future<Map<String, int>> fetchUnitPrices() async {
-    final json = await _client.get(
-      '/api/farm/recycle/prices',
-      query: const {
-        'includeTrend': '1',
-        'granularity': 'day',
-        'trendRange': '7',
-      },
-    );
-    final map = _asMap(json);
-    final prices = <String, int>{};
-
-    final direct = map['data'] is List
-        ? map['data'] as List
-        : const <dynamic>[];
-    for (final item in direct.whereType<Map<String, dynamic>>()) {
-      final seedId = item['seedId'] as String? ?? '';
-      final raw = int.tryParse('${item['recyclePrice'] ?? ''}');
-      if (seedId.isNotEmpty && raw != null) prices[seedId] = raw;
-    }
-
-    final market = map['market'] is Map<String, dynamic>
-        ? (map['market'] as Map<String, dynamic>)['items']
-        : null;
-    final items = market is List ? market : const <dynamic>[];
-    for (final item in items.whereType<Map<String, dynamic>>()) {
-      final m = MarketItem.fromJson(item);
-      if (m.seedId.isNotEmpty && m.unitPriceInt > 0) {
-        prices[m.seedId] = m.unitPriceInt;
-      }
-    }
-
-    return prices;
   }
 
   /// 可偷好友列表。`{ data: { friends: [...] } }`。
@@ -235,4 +225,12 @@ class FarmApi {
     final d = json['data'];
     return d is Map<String, dynamic> ? d : json;
   }
+}
+
+/// 实时价格合并结果：一份请求派生回收价列表与单价映射两份数据。
+class FarmPrices {
+  const FarmPrices({required this.recyclePrices, required this.unitPrices});
+
+  final List<RecyclePrice> recyclePrices;
+  final Map<String, int> unitPrices;
 }

@@ -43,7 +43,8 @@ class FarmPage extends StatelessWidget {
     try {
       await api.harvestAll();
       farmState.setLastResult('收菜成功');
-      await farmState.refresh();
+      await farmState.refreshCrops(force: true);
+      await farmState.refreshInventory(force: true);
     } on AuthExpiredException {
       farmState.setLastResult('登录已失效');
     } on Exception catch (e) {
@@ -57,7 +58,7 @@ class FarmPage extends StatelessWidget {
     try {
       final r = await api.careAll();
       farmState.setLastResult('务农：处理 ${r.processed} 块地');
-      await farmState.refresh();
+      await farmState.refreshCrops(force: true);
     } on AuthExpiredException {
       farmState.setLastResult('登录已失效');
     } on Exception catch (e) {

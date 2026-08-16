@@ -32,11 +32,9 @@ class RootShell extends StatefulWidget {
 }
 
 class _RootShellState extends State<RootShell>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WindowListener {
   Timer? _tickTimer;
   Timer? _mouseLeaveTimer;
-  Timer? _livenessTimer;
-  bool _livenessActive = false;
   DateTime? _outsideSince;
   bool _checkingLeave = false;
   late final TabController _tabController;
@@ -50,14 +48,13 @@ class _RootShellState extends State<RootShell>
     context.read<SettingsState>().addListener(_syncAutomation);
     context.read<SettingsState>().addListener(_syncHideOnMouseLeave);
     context.read<ConnectionStateStore>().addListener(_syncAutomation);
-    context.read<ConnectionStateStore>().addListener(_syncLiveness);
+    windowManager.addListener(this);
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _syncAutomation();
       _syncHideOnMouseLeave();
-      _syncLiveness();
       _refresh();
     });
   }
@@ -67,12 +64,11 @@ class _RootShellState extends State<RootShell>
     context.read<SettingsState>().removeListener(_syncAutomation);
     context.read<SettingsState>().removeListener(_syncHideOnMouseLeave);
     context.read<ConnectionStateStore>().removeListener(_syncAutomation);
-    context.read<ConnectionStateStore>().removeListener(_syncLiveness);
+    windowManager.removeListener(this);
     _tabController.removeListener(_onTabChanged);
     _tabController.dispose();
     _tickTimer?.cancel();
     _mouseLeaveTimer?.cancel();
-    _livenessTimer?.cancel();
     super.dispose();
   }
 
@@ -92,8 +88,9 @@ class _RootShellState extends State<RootShell>
     final autoCare = context.read<AutoCareService>();
     final connection = context.read<ConnectionStateStore>();
 
-    // 连接状态门控：非 healthy 时一律停止自动化，不启动调度器/务农定时器。
-    if (!connection.canRunAutomation) {
+    // 仅「需人工」状态停止自动化；瞬态（network/server/rateLimited）不 stop，
+    // 交由 RequestBackoff 门控重试（定时器继续走，退避到期后下一次 tick 恢复）。
+    if (connection.needsAttention) {
       scheduler.stop();
       autoCare.stop();
       return;
@@ -108,44 +105,6 @@ class _RootShellState extends State<RootShell>
       autoCare.start(settings.autoCareIntervalMinutes);
     } else {
       autoCare.stop();
-    }
-  }
-
-  /// 连接非 healthy 时的活体心跳：按测活间隔做轻量探测，恢复后经
-  /// [ConnectionStateStore] 通知自动重启自动化。healthy/authRequired/challengeRequired
-  /// 有各自的恢复路径（登录页 / 验证器），不在此探测。
-  void _syncLiveness() {
-    final connection = context.read<ConnectionStateStore>();
-    final settings = context.read<SettingsState>();
-    final shouldProbe = switch (connection.state) {
-      FarmConnectionState.networkError ||
-      FarmConnectionState.serverError ||
-      FarmConnectionState.unknownError ||
-      FarmConnectionState.rateLimited => true,
-      _ => false,
-    };
-    if (shouldProbe == _livenessActive) return;
-    _livenessActive = shouldProbe;
-    _livenessTimer?.cancel();
-    if (shouldProbe) {
-      _livenessTimer = Timer.periodic(
-        Duration(minutes: settings.livenessMinutes),
-        (_) => _probeLiveness(),
-      );
-    }
-  }
-
-  Future<void> _probeLiveness() async {
-    final connection = context.read<ConnectionStateStore>();
-    // 限流且恢复时刻未到：跳过本次探测，等下一周期。
-    if (connection.state == FarmConnectionState.rateLimited) {
-      final until = connection.retryAfterUntil;
-      if (until != null && DateTime.now().isBefore(until)) return;
-    }
-    try {
-      await context.read<FarmState>().refresh();
-    } catch (_) {
-      // 分类结果已由 ApiClient 上报；这里吞掉异常，避免未处理异步异常。
     }
   }
 
@@ -194,16 +153,54 @@ class _RootShellState extends State<RootShell>
         ? context.read<FriendState>()
         : null;
     try {
-      await farmState.refresh();
-      await farmState.loadSeeds();
-      await farmState.fetchRecyclePrices();
-      await farmState.loadUnitPrices();
+      // 手动刷新按钮是唯一 force:true 全量刷新入口。
+      await farmState.refresh(force: true);
+      await farmState.loadSeeds(force: true);
+      await farmState.loadPrices(force: true);
       if (friendState != null) {
-        await friendState.refresh();
+        await friendState.refresh(force: true);
       }
     } catch (_) {
       // 连接状态已由 ApiClient 上报到 ConnectionStateStore；这里吞掉异常，
       // 避免启动时未捕获异步异常。UI 据 store 状态展示。
+    }
+  }
+
+  // —— 托盘后台生命周期（仅由 windowManager 事件驱动，失焦 inactive 不改调度） ——
+
+  @override
+  void onWindowEvent(String eventName) {
+    // window_manager 用 onWindowEvent 分发所有原生事件（含 show/hide）；
+    // 前台失焦（blur/focus）不改调度，只有隐藏到托盘（hide）与恢复（show）才进入后台/前台。
+    if (eventName == 'hide') {
+      _enterBackground();
+    } else if (eventName == 'show') {
+      _leaveBackground();
+    }
+  }
+
+  @override
+  void onWindowMinimize() => _enterBackground();
+
+  @override
+  void onWindowRestore() => _leaveBackground();
+
+  void _enterBackground() {
+    final settings = context.read<SettingsState>();
+    final scheduler = context.read<HarvestScheduler>();
+    final autoCare = context.read<AutoCareService>();
+    scheduler.onAppBackgrounded(allowAutoHarvest: settings.autoHarvest);
+    // 后台不务农。
+    autoCare.stop();
+  }
+
+  void _leaveBackground() {
+    final scheduler = context.read<HarvestScheduler>();
+    final settings = context.read<SettingsState>();
+    scheduler.onAppForegrounded();
+    // 回前台按需重排务农。
+    if (settings.autoCare) {
+      context.read<AutoCareService>().start(settings.autoCareIntervalMinutes);
     }
   }
 

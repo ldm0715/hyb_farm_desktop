@@ -45,10 +45,8 @@ class _FakeApi extends FarmApi {
   Future<List<Seed>> fetchSeeds() async => const [];
 
   @override
-  Future<List<RecyclePrice>> fetchRecyclePrices() async => const [];
-
-  @override
-  Future<Map<String, int>> fetchUnitPrices() async => const {};
+  Future<FarmPrices> fetchPrices() async =>
+      const FarmPrices(recyclePrices: [], unitPrices: {});
 }
 
 // Golden baselines vary across Windows rendering environments. These diagnostic
