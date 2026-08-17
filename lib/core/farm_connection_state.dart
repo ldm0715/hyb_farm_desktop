@@ -33,7 +33,7 @@ extension FarmConnectionStateTitle on FarmConnectionState {
   String get title => switch (this) {
     FarmConnectionState.healthy => '正常',
     FarmConnectionState.authRequired => '需要登录',
-    FarmConnectionState.challengeRequired => '需要验证',
+    FarmConnectionState.challengeRequired => '需验证',
     FarmConnectionState.rateLimited => '请求受限',
     FarmConnectionState.networkError => '网络异常',
     FarmConnectionState.serverError => '服务异常',
@@ -66,7 +66,7 @@ extension FarmConnectionStateTitle on FarmConnectionState {
   String get accountSubtitle => switch (this) {
     FarmConnectionState.healthy => '登录状态正常',
     FarmConnectionState.authRequired => '需要重新登录',
-    FarmConnectionState.challengeRequired => '需要完成安全验证',
+    FarmConnectionState.challengeRequired => '需验证',
     FarmConnectionState.rateLimited => '请求受限，请稍后重试',
     FarmConnectionState.networkError => '无法检查账户状态',
     FarmConnectionState.serverError => '服务异常，请稍后重试',

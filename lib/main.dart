@@ -80,6 +80,16 @@ Future<void> main() async {
   final replant = ReplantService(api: farmApi);
   final recycleService = RecycleService(api: farmApi, coordinator: coordinator);
   final notifications = NotificationService();
+  // 403 需验证：进入 challengeRequired 时发一次 Windows 通知（prev != curr 去重，避免连续 403 刷屏）。
+  FarmConnectionState? prevState = connectionStore.state;
+  connectionStore.addListener(() {
+    final curr = connectionStore.state;
+    final prev = prevState;
+    prevState = curr;
+    if (curr == FarmConnectionState.challengeRequired && curr != prev) {
+      notifications.show('需要安全验证', '自动化任务已暂停，请完成人机验证');
+    }
+  });
   final harvestLog = await HarvestLog.create();
   final careLog = await CareLog.create();
   final scheduler = HarvestScheduler(

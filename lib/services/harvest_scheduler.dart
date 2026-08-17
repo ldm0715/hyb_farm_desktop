@@ -31,6 +31,9 @@ enum RecoveryReason {
 
   /// fallback 定时器检测到异常时间间隔（系统休眠导致 Timer 滞后）。
   timerGap,
+
+  /// 完成人机验证、状态从 challengeRequired 恢复 healthy。
+  challengeCleared,
 }
 
 class HarvestScheduler {

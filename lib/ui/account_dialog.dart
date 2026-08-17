@@ -8,8 +8,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:hyb_farm_desktop/auth/auth_service.dart';
 import 'package:hyb_farm_desktop/core/farm_connection_state.dart';
+import 'package:hyb_farm_desktop/services/challenge_verifier.dart';
 import 'package:hyb_farm_desktop/state/connection_state_store.dart';
 import 'package:hyb_farm_desktop/theme/farm_theme.dart';
+import 'package:hyb_farm_desktop/ui/challenge_dialog.dart';
 
 /// 打开账户与安全详情对话框。
 Future<void> showAccountDialog(BuildContext context) {
@@ -97,6 +99,12 @@ class _AccountDialogState extends State<_AccountDialog> {
     await auth.clearCookie();
   }
 
+  Future<void> _verify() async {
+    final verifier = context.read<ChallengeVerifier>();
+    final auth = context.read<AuthService>();
+    await showChallengeDialog(context, verifier: verifier, auth: auth);
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthService>();
@@ -131,6 +139,16 @@ class _AccountDialogState extends State<_AccountDialog> {
                 ),
               ),
               const SizedBox(height: 12),
+              if (state == FarmConnectionState.challengeRequired) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: _verify,
+                    child: const Text('完成人机验证'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               Row(
                 children: [
                   Expanded(

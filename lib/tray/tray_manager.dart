@@ -30,6 +30,7 @@ class TrayManager extends WindowListener {
   Timer? _tickTimer;
   String? _lastCountdownLabel;
   String? _lastStatusLabel;
+  bool _errorIcon = false;
 
   Future<void> init() async {
     windowManager.addListener(this);
@@ -46,6 +47,7 @@ class TrayManager extends WindowListener {
       await _buildMenu();
       settings.addListener(_syncMenu);
       _updateCountdown();
+      _updateStatus();
       _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         _updateCountdown();
         _updateStatus();
@@ -107,15 +109,28 @@ class TrayManager extends WindowListener {
     _countdownItem?.setLabel(label).ignore();
   }
 
-  /// 更新顶部状态项；label 未变时跳过。
+  /// 更新顶部状态项；label 未变时跳过，同时按需切换托盘图标（challengeRequired → error 图标）。
   void _updateStatus() {
     final state = connectionStore.state;
     final String label = state == FarmConnectionState.healthy
         ? '状态：正常'
         : '状态：${state.title}';
-    if (label == _lastStatusLabel) return;
-    _lastStatusLabel = label;
-    _statusItem?.setLabel(label).ignore();
+    if (label != _lastStatusLabel) {
+      _lastStatusLabel = label;
+      _statusItem?.setLabel(label).ignore();
+    }
+
+    final challenge = state == FarmConnectionState.challengeRequired;
+    if (challenge != _errorIcon) {
+      _errorIcon = challenge;
+      _tray
+          .setImage(
+            challenge
+                ? 'assets/icon/logo_error.ico'
+                : 'assets/icon/app_icon.ico',
+          )
+          .ignore();
+    }
   }
 
   void _onTrayEvent(String eventName) {

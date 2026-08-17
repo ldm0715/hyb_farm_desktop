@@ -138,15 +138,27 @@ class _RootShellState extends State<RootShell>
     final curr = connection.state;
     _prevConnectionState = curr;
     _syncAutomation();
-    if (curr == FarmConnectionState.healthy &&
-        prev != null &&
-        curr != prev &&
-        _isTransient(prev)) {
-      unawaited(
-        context
-            .read<HarvestScheduler>()
-            .recoverAndReschedule(RecoveryReason.networkRecovered),
-      );
+    if (curr == FarmConnectionState.healthy && prev != null && curr != prev) {
+      if (_isTransient(prev)) {
+        unawaited(
+          context
+              .read<HarvestScheduler>()
+              .recoverAndReschedule(RecoveryReason.networkRecovered),
+        );
+      } else if (prev == FarmConnectionState.challengeRequired) {
+        // 完成人机验证后恢复：立即补收 + 务农，重跑被 403 拦下的自动化写请求。
+        unawaited(_recoverAfterChallenge());
+      }
+    }
+  }
+
+  Future<void> _recoverAfterChallenge() async {
+    final settings = context.read<SettingsState>();
+    final scheduler = context.read<HarvestScheduler>();
+    final autoCare = context.read<AutoCareService>();
+    await scheduler.recoverAndReschedule(RecoveryReason.challengeCleared);
+    if (settings.autoCare) {
+      await autoCare.checkAndCare();
     }
   }
 
@@ -371,7 +383,7 @@ class _HeaderBar extends StatelessWidget {
           }
         : switch (conn) {
             FarmConnectionState.authRequired => (colors.error, '需要登录'),
-            FarmConnectionState.challengeRequired => (colors.warning, '需要验证'),
+            FarmConnectionState.challengeRequired => (colors.warning, '需验证'),
             FarmConnectionState.rateLimited => (colors.warning, '请求受限'),
             FarmConnectionState.networkError => (colors.error, '网络异常'),
             FarmConnectionState.serverError => (colors.error, '服务异常'),
