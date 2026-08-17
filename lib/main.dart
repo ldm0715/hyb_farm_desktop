@@ -21,6 +21,7 @@ import 'services/challenge_verifier.dart';
 import 'services/harvest_log.dart';
 import 'services/harvest_scheduler.dart';
 import 'services/notification_service.dart';
+import 'services/power_service.dart';
 import 'services/recycle_service.dart';
 import 'services/replant_service.dart';
 import 'state/connection_state_store.dart';
@@ -33,8 +34,10 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // 日志系统最先初始化（早于 windowManager），窗口初始化失败也能记录。
+  // 自定义日志目录在 AppLogger.init 前读取（SettingsState 此时尚未创建）。
   final supportDir = await getApplicationSupportDirectory();
-  await AppLogger.instance.init(directory: supportDir.path);
+  final logRoot = await SettingsState.loadLogDirectory() ?? supportDir.path;
+  await AppLogger.instance.init(directory: logRoot);
 
   // 全局未捕获异常：框架层与平台层（root isolate）都落入文件日志。
   FlutterError.onError = (details) {
@@ -98,6 +101,7 @@ Future<void> main() async {
     connectionStore: connectionStore,
     backoff: backoff,
   );
+  final power = PowerService();
   final friendState = FriendState(api: farmApi, coordinator: coordinator);
   final challengeVerifier = ChallengeVerifier(
     store: connectionStore,
@@ -111,6 +115,7 @@ Future<void> main() async {
   );
 
   await notifications.init();
+  await power.init();
   await trayManager.init();
   await auth.tryRestore();
 
@@ -133,6 +138,7 @@ Future<void> main() async {
       friendState: friendState,
       connectionStore: connectionStore,
       challengeVerifier: challengeVerifier,
+      power: power,
     ),
   );
 }

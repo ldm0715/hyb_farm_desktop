@@ -39,6 +39,17 @@ const Duration kBackoffMaxDelay = Duration(minutes: 30);
 /// 回前台距上次成功刷新超过此时长才强制刷新（保留阈值语义）。
 const Duration kBackgroundResumeThreshold = Duration(minutes: 2);
 
+/// 系统恢复（powerResume）事件的去抖窗口：短时间多条 resume 只保留一次。
+const Duration kResumeDebounce = Duration(seconds: 2);
+
+/// 恢复流程（recoverAndReschedule）的网络失败重试退避序列（含首试共 4 次）。
+/// 仅 ApiNetworkException 重试；唤醒后 Wi-Fi 恢复可能超过数秒。
+const List<Duration> kRecoveryRetryDelays = [
+  Duration(seconds: 2),
+  Duration(seconds: 5),
+  Duration(seconds: 15),
+];
+
 /// 作物图标文件名后缀。
 const String kCropIconSuffix = '_s4.png';
 
@@ -52,7 +63,7 @@ const int kFriendsPageSize = 5;
 const Duration kFriendDetailCache = Duration(minutes: 2);
 
 /// 应用版本号（展示于设置页「关于与数据」，需与 pubspec.yaml 的 version 手动同步）。
-const String kAppVersion = '0.1.2';
+const String kAppVersion = '0.1.3';
 
 /// 拼接作物图标完整地址。
 String cropIconUrl(String seedImage) => '$kBaseUrl$seedImage$kCropIconSuffix';

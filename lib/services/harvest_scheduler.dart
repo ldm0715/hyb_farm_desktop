@@ -6,6 +6,7 @@ import 'dart:async';
 import 'package:hyb_farm_desktop/api/api_client.dart';
 import 'package:hyb_farm_desktop/api/farm_api.dart';
 import 'package:hyb_farm_desktop/core/constants.dart';
+import 'package:hyb_farm_desktop/core/log/app_logger.dart';
 import 'package:hyb_farm_desktop/core/operation_coordinator.dart';
 import 'package:hyb_farm_desktop/core/request_backoff.dart';
 import 'package:hyb_farm_desktop/services/harvest_log.dart';
@@ -14,6 +15,23 @@ import 'package:hyb_farm_desktop/services/replant_service.dart';
 import 'package:hyb_farm_desktop/state/farm_state.dart';
 import 'package:hyb_farm_desktop/state/connection_state_store.dart';
 import 'package:hyb_farm_desktop/state/settings_state.dart';
+
+/// 触发一次「恢复 + 重排」的来源。
+///
+/// 所有入口共用同一个 single-flight 协调器（[HarvestScheduler.recoverAndReschedule]）。
+enum RecoveryReason {
+  /// 应用进入前台（window_manager 的 show/restore）。
+  foreground,
+
+  /// Windows 从睡眠/休眠恢复（原生 WM_POWERBROADCAST）。
+  powerResume,
+
+  /// 网络从瞬时错误恢复（networkError/serverError → healthy）。
+  networkRecovered,
+
+  /// fallback 定时器检测到异常时间间隔（系统休眠导致 Timer 滞后）。
+  timerGap,
+}
 
 class HarvestScheduler {
   HarvestScheduler({
@@ -26,6 +44,7 @@ class HarvestScheduler {
     required HarvestLog harvestLog,
     required ConnectionStateStore connectionStore,
     RequestBackoff? backoff,
+    List<Duration>? recoveryRetryDelays,
     DateTime Function() now = DateTime.now,
   }) : _api = api,
        _farmState = farmState,
@@ -36,6 +55,7 @@ class HarvestScheduler {
        _harvestLog = harvestLog,
        _connectionStore = connectionStore,
        _backoff = backoff ?? RequestBackoff(),
+       _recoveryRetryDelays = recoveryRetryDelays ?? kRecoveryRetryDelays,
        _now = now;
 
   final FarmApi _api;
@@ -48,6 +68,7 @@ class HarvestScheduler {
   final ConnectionStateStore _connectionStore;
   final RequestBackoff _backoff;
   final DateTime Function() _now;
+  final List<Duration> _recoveryRetryDelays;
 
   /// crops 资源的退避/门控键。
   static const _cropsKey = '/api/farm/crops';
@@ -56,18 +77,25 @@ class HarvestScheduler {
   Timer? _matureTimer;
   Timer? _fallbackTimer;
   DateTime? _lastHarvestAt;
+  DateTime? _lastFallbackTickAt;
   bool _running = false;
 
-  /// 最小收菜间隔守卫，避免多个触发源叠加请求。
+  // —— 恢复流程 single-flight / coalescing ——
+  bool _recoveryRunning = false;
+  RecoveryReason? _pendingRecoveryReason;
+  Completer<void>? _recoveryCompleter;
+
+  /// 最小收菜间隔守卫，避免多个触发源叠加请求（仅作 cooldown，不替代 single-flight）。
   static const _minInterval = Duration(seconds: 30);
 
   void start() {
     if (_running) return;
     _running = true;
     _farmState.setAutomation(AutomationStatus.running);
+    _lastFallbackTickAt = _now();
     _fallbackTimer = Timer.periodic(
       kHarvestFallbackInterval,
-      (_) => _reschedule(),
+      (_) => _onFallbackTick(),
     );
     _reschedule();
   }
@@ -76,6 +104,7 @@ class HarvestScheduler {
     _running = false;
     _matureTimer?.cancel();
     _fallbackTimer?.cancel();
+    _lastFallbackTickAt = null;
     _farmState.setAutomation(AutomationStatus.paused);
   }
 
@@ -96,17 +125,95 @@ class HarvestScheduler {
     // 自动收菜开启：保留现有 mature Timer 与 fallback Timer，不做额外动作。
   }
 
-  /// 恢复前台：总是 refreshCrops(force:true) 一次拿最新，再按需刷库存并重排 mature。
-  Future<void> onAppForegrounded() async {
-    if (!_running) return;
-    try {
-      await _farmState.refreshCrops(force: true);
-      await _reschedule();
-    } on AuthExpiredException {
-      _handleExpired();
-    } on Exception {
-      // 恢复前台刷新失败：连接状态已由 ApiClient 上报，交由 fallback 兜底。
+  /// 统一恢复协调器：所有恢复入口（前台 / 系统唤醒 / 网络恢复 / timer-gap）共用。
+  ///
+  /// single-flight + coalescing：任意时刻至多一个恢复流程；执行期间新事件合并为
+  /// 至多一个补跑。返回的 Future 在刷新、补收与重排真正完成后才 complete。
+  Future<void> recoverAndReschedule(RecoveryReason reason) {
+    if (!_running) return Future<void>.value();
+    if (_recoveryRunning) {
+      _pendingRecoveryReason ??= reason;
+      AppLog.i('Recovery', 'coalesced', {'reason': reason.name});
+      return _recoveryCompleter!.future;
     }
+    _recoveryRunning = true;
+    final completer = Completer<void>();
+    _recoveryCompleter = completer;
+    // _runRecoveryLoop 内部吞掉所有异常、从不抛，故 then 后无未处理异步错误。
+    _runRecoveryLoop(reason).then((_) => completer.complete());
+    return completer.future;
+  }
+
+  Future<void> _runRecoveryLoop(RecoveryReason first) async {
+    try {
+      var reason = first;
+      while (true) {
+        await _doRecovery(reason);
+        final next = _pendingRecoveryReason;
+        _pendingRecoveryReason = null;
+        if (next == null) break;
+        reason = next;
+      }
+    } finally {
+      _recoveryRunning = false;
+      _recoveryCompleter = null;
+    }
+  }
+
+  /// 单轮恢复：force 刷新 → 有成熟则完整补收（await 到完成）→ 否则重排成熟 Timer。
+  /// 网络失败按注入退避有限重试；认证失效/业务错误/限流等不重试。
+  Future<void> _doRecovery(RecoveryReason reason) async {
+    AppLog.i('Recovery', 'start', {'reason': reason.name});
+    for (var attempt = 0; ; attempt++) {
+      try {
+        await _farmState.refreshCrops(force: true);
+        // 用绝对成熟时刻 matureAt(now) 判定：休眠期间 remainingTime 是静态快照不自减，
+        // 必须用墙钟重算是否有已成熟作物需要补收（matureCount 走 c.mature 会漏判）。
+        final now = _now();
+        final hasMature = _farmState.crops?.crops
+                .any((c) => !c.isEmpty && c.matureAt(now)) ??
+            false;
+        if (hasMature) {
+          // 走同一 coordinator，完整收菜+补种+重排，await 到真正完成。
+          await _coordinator.run(_harvestFlow);
+        } else {
+          await _reschedule();
+        }
+        AppLog.i('Recovery', 'success', {'reason': reason.name});
+        return;
+      } on AuthExpiredException {
+        _handleExpired();
+        AppLog.i('Recovery', 'failed',
+            {'reason': reason.name, 'attempt': attempt + 1, 'error': 'auth'});
+        return;
+      } on ApiNetworkException {
+        AppLog.i('Recovery', 'failed',
+            {'reason': reason.name, 'attempt': attempt + 1});
+        if (attempt >= _recoveryRetryDelays.length) return;
+        await Future.delayed(_recoveryRetryDelays[attempt]);
+      } on Exception {
+        // challenge / rateLimited / business / unknown：不重试，交由各自机制处理。
+        AppLog.i('Recovery', 'failed',
+            {'reason': reason.name, 'attempt': attempt + 1});
+        return;
+      }
+    }
+  }
+
+  /// fallback 兜底 tick：检测 timer-gap（系统休眠导致 Timer 滞后）并触发恢复，
+  /// 否则走常规 _reschedule。
+  void _onFallbackTick() {
+    final now = _now();
+    final gap = _lastFallbackTickAt == null
+        ? Duration.zero
+        : now.difference(_lastFallbackTickAt!);
+    _lastFallbackTickAt = now;
+    if (gap > kHarvestFallbackInterval + kBackgroundResumeThreshold) {
+      AppLog.i('Scheduler', 'timer gap detected', {'duration': gap.inSeconds});
+      recoverAndReschedule(RecoveryReason.timerGap);
+      return;
+    }
+    _reschedule();
   }
 
   /// 拉取作物并安排下一次成熟任务；失败交由兜底定时器重试。

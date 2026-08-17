@@ -12,6 +12,7 @@ import 'package:hyb_farm_desktop/services/challenge_verifier.dart';
 import 'package:hyb_farm_desktop/services/harvest_log.dart';
 import 'package:hyb_farm_desktop/services/harvest_scheduler.dart';
 import 'package:hyb_farm_desktop/services/notification_service.dart';
+import 'package:hyb_farm_desktop/services/power_service.dart';
 import 'package:hyb_farm_desktop/services/recycle_service.dart';
 import 'package:hyb_farm_desktop/services/replant_service.dart';
 import 'package:hyb_farm_desktop/state/connection_state_store.dart';
@@ -40,6 +41,7 @@ class HybFarmApp extends StatelessWidget {
     required this.friendState,
     required this.connectionStore,
     required this.challengeVerifier,
+    required this.power,
   });
 
   final FarmApi api;
@@ -57,6 +59,7 @@ class HybFarmApp extends StatelessWidget {
   final FriendState friendState;
   final ConnectionStateStore connectionStore;
   final ChallengeVerifier challengeVerifier;
+  final PowerService power;
 
   @override
   Widget build(BuildContext context) {
@@ -79,6 +82,7 @@ class HybFarmApp extends StatelessWidget {
           value: connectionStore,
         ),
         Provider<ChallengeVerifier>.value(value: challengeVerifier),
+        Provider<PowerService>.value(value: power),
       ],
       child: const _MaterialApp(),
     );

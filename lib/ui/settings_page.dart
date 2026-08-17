@@ -7,14 +7,20 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:hyb_farm_desktop/auth/auth_service.dart';
 import 'package:hyb_farm_desktop/core/constants.dart';
+import 'package:hyb_farm_desktop/core/desktop_shell.dart';
 import 'package:hyb_farm_desktop/core/farm_connection_state.dart';
 import 'package:hyb_farm_desktop/core/formatters.dart';
+import 'package:hyb_farm_desktop/core/log/app_logger.dart';
 import 'package:hyb_farm_desktop/services/auto_care_service.dart';
+import 'package:hyb_farm_desktop/services/update_service.dart';
 import 'package:hyb_farm_desktop/state/connection_state_store.dart';
 import 'package:hyb_farm_desktop/state/farm_state.dart';
 import 'package:hyb_farm_desktop/state/settings_state.dart';
 import 'package:hyb_farm_desktop/theme/farm_theme.dart';
 import 'account_dialog.dart';
+import 'log_directory_dialog.dart';
+import 'log_viewer_dialog.dart';
+import 'update_dialog.dart';
 import 'widgets/farm_icon.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -26,6 +32,8 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   Timer? _tickTimer;
+  final UpdateService _updater = UpdateService();
+  bool _checkingUpdate = false;
 
   @override
   void initState() {
@@ -149,6 +157,13 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ),
               ),
+            SwitchListTile(
+              title: const Text('自动化期间保持电脑运行'),
+              subtitle: const Text('阻止系统因空闲自动睡眠（屏幕仍可关闭），会增加耗电与发热'),
+              value: settings.preventSleepDuringAutomation,
+              onChanged: (v) => settings.preventSleepDuringAutomation = v,
+              contentPadding: EdgeInsets.zero,
+            ),
           ],
         ),
         _SettingsGroup(
@@ -199,6 +214,32 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
         _SettingsGroup(
+          title: '日志',
+          children: [
+            ListTile(
+              leading: Icon(Icons.folder_outlined, color: colors.textSecondary),
+              title: const Text('日志目录'),
+              subtitle: Text(
+                _logsDirLabel(settings),
+                style: FarmTextStyles.settingDescription.copyWith(
+                  color: colors.textSecondary,
+                ),
+              ),
+              trailing: Icon(Icons.chevron_right, color: colors.textTertiary),
+              contentPadding: EdgeInsets.zero,
+              onTap: () => showLogDirectoryDialog(context, settings),
+            ),
+            ListTile(
+              leading: Icon(Icons.article_outlined, color: colors.textSecondary),
+              title: const Text('查看日志'),
+              subtitle: const Text('查看应用运行日志'),
+              trailing: Icon(Icons.chevron_right, color: colors.textTertiary),
+              contentPadding: EdgeInsets.zero,
+              onTap: () => showLogViewerDialog(context),
+            ),
+          ],
+        ),
+        _SettingsGroup(
           title: '关于与数据',
           children: [
             ListTile(
@@ -212,6 +253,23 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               contentPadding: EdgeInsets.zero,
+            ),
+            ListTile(
+              leading: Icon(
+                Icons.system_update_alt,
+                color: colors.textSecondary,
+              ),
+              title: const Text('检查更新'),
+              subtitle: const Text('从 GitHub Releases 获取最新版本'),
+              trailing: _checkingUpdate
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(Icons.chevron_right, color: colors.textTertiary),
+              contentPadding: EdgeInsets.zero,
+              onTap: _checkingUpdate ? null : () => _checkUpdate(context),
             ),
           ],
         ),
@@ -232,6 +290,34 @@ class _SettingsPageState extends State<SettingsPage> {
     if (nextAt == null) return '下次务农：—';
     final seconds = nextAt.difference(DateTime.now()).inSeconds;
     return '下次务农：${formatCountdown(seconds)}';
+  }
+
+  String _logsDirLabel(SettingsState settings) {
+    final root = settings.logDirectory ?? AppLogger.instance.logsRoot;
+    if (root == null || root.isEmpty) return '默认目录';
+    return logsDirFor(root);
+  }
+
+  Future<void> _checkUpdate(BuildContext context) async {
+    setState(() => _checkingUpdate = true);
+    try {
+      final info = await _updater.fetchLatest();
+      if (!context.mounted) return;
+      if (_updater.hasUpdate(info)) {
+        await showUpdateDialog(context, info);
+      } else {
+        await showUpToDateDialog(context, kAppVersion);
+      }
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('检查更新失败，请检查网络后重试')),
+        );
+    } finally {
+      if (mounted) setState(() => _checkingUpdate = false);
+    }
   }
 
   /// 统一右侧下拉控件表面：固定宽度圆角容器 + 无下划线，避免「圆角容器内挂下划线」混用。

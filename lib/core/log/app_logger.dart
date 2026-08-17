@@ -26,8 +26,15 @@ class AppLogger {
 
   LogEnvironment _environment = LogEnvironment.development;
   final List<LogSink> _sinks = [];
+  LogSink? _fileSink;
+  String? _logsRoot;
+  DateTime Function() _now = DateTime.now;
+  int _retainDays = 7;
   bool _disposed = false;
   bool _initialized = false;
+
+  /// 当前日志根目录（日志写入其下 `logs/` 子目录）；未初始化时返回 null。
+  String? get logsRoot => _logsRoot;
 
   /// 初始化日志系统。同一进程内只应调用一次。
   ///
@@ -42,11 +49,40 @@ class AppLogger {
   }) async {
     if (_initialized) return;
     _initialized = true;
+    _logsRoot = directory;
+    _now = now ?? DateTime.now;
+    _retainDays = retainDays;
     _environment = environment ?? resolveEnvironment();
     if (_environment.consoleEnabled) {
       _sinks.add(ConsoleLogSink());
     }
-    _sinks.add(createFileSink(directory, now: now, retainDays: retainDays));
+    final fileSink = createFileSink(directory, now: _now, retainDays: _retainDays);
+    _fileSink = fileSink;
+    _sinks.add(fileSink);
+  }
+
+  /// 运行时切换日志根目录：换掉文件 sink，后续日志立即写入新目录（旧目录文件原地保留）。
+  ///
+  /// [directory] 为新的应用可写根目录，内部同样追加 `logs/` 子目录。
+  Future<void> setLogsDirectory(String directory) async {
+    // 先建新 sink：若目录不可写会抛异常，此时旧 sink 与 `_logsRoot` 均不受影响。
+    final fileSink = createFileSink(
+      directory,
+      now: _now,
+      retainDays: _retainDays,
+    );
+    final old = _fileSink;
+    if (old != null) {
+      _sinks.remove(old);
+      try {
+        old.dispose();
+      } catch (_) {
+        // 释放失败忽略。
+      }
+    }
+    _fileSink = fileSink;
+    _sinks.add(fileSink);
+    _logsRoot = directory;
   }
 
   /// 测试专用：用内存 sink 替换默认装配。

@@ -3,7 +3,7 @@
 #define MyAppExeName "hyb_farm_desktop.exe"
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.2"
+  #define MyAppVersion "0.1.3"
 #endif
 
 [Setup]

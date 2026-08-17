@@ -12,6 +12,7 @@ import 'package:hyb_farm_desktop/core/farm_connection_state.dart';
 import 'package:hyb_farm_desktop/services/auto_care_service.dart';
 import 'package:hyb_farm_desktop/services/challenge_verifier.dart';
 import 'package:hyb_farm_desktop/services/harvest_scheduler.dart';
+import 'package:hyb_farm_desktop/services/power_service.dart';
 import 'package:hyb_farm_desktop/state/connection_state_store.dart';
 import 'package:hyb_farm_desktop/state/farm_state.dart';
 import 'package:hyb_farm_desktop/state/friend_state.dart';
@@ -35,6 +36,8 @@ class _RootShellState extends State<RootShell>
     with SingleTickerProviderStateMixin, WindowListener {
   Timer? _tickTimer;
   Timer? _mouseLeaveTimer;
+  StreamSubscription<PowerEvent>? _powerSub;
+  FarmConnectionState? _prevConnectionState;
   DateTime? _outsideSince;
   bool _checkingLeave = false;
   late final TabController _tabController;
@@ -47,8 +50,13 @@ class _RootShellState extends State<RootShell>
     _tabController.addListener(_onTabChanged);
     context.read<SettingsState>().addListener(_syncAutomation);
     context.read<SettingsState>().addListener(_syncHideOnMouseLeave);
-    context.read<ConnectionStateStore>().addListener(_syncAutomation);
+    context.read<ConnectionStateStore>().addListener(_onConnectionChanged);
+    _prevConnectionState = context.read<ConnectionStateStore>().state;
     windowManager.addListener(this);
+    // 原生电源事件：resume 触发统一恢复；suspend 仅日志（已在 PowerService 记录）。
+    _powerSub = context.read<PowerService>().events.listen((event) {
+      if (event == PowerEvent.resume) _onPowerResume();
+    });
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
@@ -63,12 +71,17 @@ class _RootShellState extends State<RootShell>
   void dispose() {
     context.read<SettingsState>().removeListener(_syncAutomation);
     context.read<SettingsState>().removeListener(_syncHideOnMouseLeave);
-    context.read<ConnectionStateStore>().removeListener(_syncAutomation);
+    context.read<ConnectionStateStore>().removeListener(_onConnectionChanged);
     windowManager.removeListener(this);
     _tabController.removeListener(_onTabChanged);
     _tabController.dispose();
     _tickTimer?.cancel();
     _mouseLeaveTimer?.cancel();
+    _powerSub?.cancel();
+    // 退出登录（RootShell 卸载）：主动释放睡眠阻止。
+    unawaited(
+      context.read<PowerService>().releaseSleepPrevention(reason: 'logout'),
+    );
     super.dispose();
   }
 
@@ -87,25 +100,71 @@ class _RootShellState extends State<RootShell>
     final scheduler = context.read<HarvestScheduler>();
     final autoCare = context.read<AutoCareService>();
     final connection = context.read<ConnectionStateStore>();
+    final power = context.read<PowerService>();
 
     // 仅「需人工」状态停止自动化；瞬态（network/server/rateLimited）不 stop，
     // 交由 RequestBackoff 门控重试（定时器继续走，退避到期后下一次 tick 恢复）。
     if (connection.needsAttention) {
       scheduler.stop();
       autoCare.stop();
-      return;
+    } else {
+      if (settings.autoHarvest) {
+        scheduler.start();
+      } else {
+        scheduler.stop();
+      }
+      if (settings.autoCare) {
+        autoCare.start(settings.autoCareIntervalMinutes);
+      } else {
+        autoCare.stop();
+      }
     }
 
-    if (settings.autoHarvest) {
-      scheduler.start();
-    } else {
-      scheduler.stop();
+    // 睡眠阻止：依据用户意图 + 会话有效性，不因瞬时网络错误（networkError/serverError）释放。
+    final automationDesired = settings.autoHarvest || settings.autoCare;
+    final sessionValid = connection.state != FarmConnectionState.authRequired;
+    unawaited(
+      power.syncSleepPrevention(
+        enabled: settings.preventSleepDuringAutomation,
+        automationRunning: automationDesired && sessionValid,
+      ),
+    );
+  }
+
+  /// 连接状态变化：先同步自动化（确保 scheduler 已启动），再决定是否触发网络恢复。
+  void _onConnectionChanged() {
+    final connection = context.read<ConnectionStateStore>();
+    final prev = _prevConnectionState;
+    final curr = connection.state;
+    _prevConnectionState = curr;
+    _syncAutomation();
+    if (curr == FarmConnectionState.healthy &&
+        prev != null &&
+        curr != prev &&
+        _isTransient(prev)) {
+      unawaited(
+        context
+            .read<HarvestScheduler>()
+            .recoverAndReschedule(RecoveryReason.networkRecovered),
+      );
     }
-    if (settings.autoCare) {
-      autoCare.start(settings.autoCareIntervalMinutes);
-    } else {
-      autoCare.stop();
-    }
+  }
+
+  bool _isTransient(FarmConnectionState s) =>
+      s == FarmConnectionState.networkError ||
+      s == FarmConnectionState.serverError;
+
+  /// 系统从睡眠恢复：先补收重排，再按需立即务农。两者写入均经共用 OperationCoordinator 串行。
+  void _onPowerResume() {
+    final settings = context.read<SettingsState>();
+    final scheduler = context.read<HarvestScheduler>();
+    final autoCare = context.read<AutoCareService>();
+    unawaited(() async {
+      await scheduler.recoverAndReschedule(RecoveryReason.powerResume);
+      if (settings.autoCare) {
+        await autoCare.checkAndCare();
+      }
+    }());
   }
 
   /// 按设置启停「鼠标移出自动隐藏」的轮询。
@@ -197,7 +256,7 @@ class _RootShellState extends State<RootShell>
   void _leaveBackground() {
     final scheduler = context.read<HarvestScheduler>();
     final settings = context.read<SettingsState>();
-    scheduler.onAppForegrounded();
+    unawaited(scheduler.recoverAndReschedule(RecoveryReason.foreground));
     // 回前台按需重排务农。
     if (settings.autoCare) {
       context.read<AutoCareService>().start(settings.autoCareIntervalMinutes);

@@ -22,11 +22,22 @@ class SettingsState extends ChangeNotifier {
   static const _kNotifyAuth = 'hyb-farm-notify-auth';
   static const _kWindowX = 'hyb-farm-window-x';
   static const _kWindowY = 'hyb-farm-window-y';
+  static const _kLogDirectory = 'hyb-farm-log-directory';
+  static const _kPreventSleep = 'hyb-farm-prevent-sleep';
 
   final SharedPreferences _prefs;
 
   static Future<SettingsState> create() async {
     return SettingsState._(await SharedPreferences.getInstance()).._load();
+  }
+
+  /// 读取持久化的自定义日志根目录（null 表示用默认目录）。
+  ///
+  /// 供 `main()` 在 `AppLogger.init` 之前调用——此时 `SettingsState` 尚未创建，
+  /// 但 `SharedPreferences.getInstance()` 是单例、可安全复用。
+  static Future<String?> loadLogDirectory() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_kLogDirectory);
   }
 
   bool _autoHarvest = false;
@@ -128,6 +139,28 @@ class SettingsState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 自定义日志根目录（日志写入其下 `logs/` 子目录）；null 表示用默认目录。
+  String? _logDirectory;
+  String? get logDirectory => _logDirectory;
+  set logDirectory(String? v) {
+    _logDirectory = v;
+    if (v == null) {
+      _prefs.remove(_kLogDirectory);
+    } else {
+      _prefs.setString(_kLogDirectory, v);
+    }
+    notifyListeners();
+  }
+
+  /// 自动化运行期间阻止系统空闲自动睡眠（不含屏幕，屏幕仍可关）。默认关。
+  bool _preventSleepDuringAutomation = false;
+  bool get preventSleepDuringAutomation => _preventSleepDuringAutomation;
+  set preventSleepDuringAutomation(bool v) {
+    _preventSleepDuringAutomation = v;
+    _prefs.setBool(_kPreventSleep, v);
+    notifyListeners();
+  }
+
   void _load() {
     _autoHarvest = _prefs.getBool(_kAutoHarvest) ?? false;
     _replantSeedId = _prefs.getString(_kReplantSeed);
@@ -139,6 +172,8 @@ class SettingsState extends ChangeNotifier {
     _livenessMinutes = _prefs.getInt(_kLivenessMinutes) ?? 5;
     _notifyHarvest = _prefs.getBool(_kNotifyHarvest) ?? true;
     _notifyAuthExpired = _prefs.getBool(_kNotifyAuth) ?? true;
+    _logDirectory = _prefs.getString(_kLogDirectory);
+    _preventSleepDuringAutomation = _prefs.getBool(_kPreventSleep) ?? false;
     final wx = _prefs.getDouble(_kWindowX);
     final wy = _prefs.getDouble(_kWindowY);
     if (wx != null && wy != null) _windowPosition = Offset(wx, wy);

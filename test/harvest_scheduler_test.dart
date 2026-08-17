@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hyb_farm_desktop/api/api_client.dart';
 import 'package:hyb_farm_desktop/api/farm_api.dart';
 import 'package:hyb_farm_desktop/api/models.dart';
+import 'package:hyb_farm_desktop/core/constants.dart';
 import 'package:hyb_farm_desktop/core/operation_coordinator.dart';
 import 'package:hyb_farm_desktop/services/harvest_log.dart';
 import 'package:hyb_farm_desktop/services/harvest_scheduler.dart';
@@ -27,6 +28,12 @@ class _RecordingApi extends FarmApi {
   List<InventoryItem> inventory = const [];
   bool failHarvest = false;
 
+  /// 前 N 次 fetchCrops 抛 ApiNetworkException（模拟唤醒后短暂断网）。
+  int failFetchN = 0;
+
+  /// fetchCrops 抛 AuthExpiredException。
+  bool failAuth = false;
+
   /// pending 作物第一次 fetch 时算出的剩余秒数快照，之后不再随墙钟自减，
   /// 模拟后端 `remainingTime` 是请求时刻静态快照的真实行为。
   int? _pendingRemainingSnapshot;
@@ -38,6 +45,11 @@ class _RecordingApi extends FarmApi {
   @override
   Future<CropsResponse> fetchCrops() async {
     fetchCropsCalls++;
+    if (failAuth) throw const AuthExpiredException();
+    if (failFetchN > 0) {
+      failFetchN--;
+      throw const ApiNetworkException('network down');
+    }
     final crops = <Crop>[];
     if (hasMatureCrop) {
       crops.add(
@@ -101,6 +113,7 @@ HarvestScheduler _build({
   required SettingsState settings,
   required HarvestLog harvestLog,
   required DateTime Function() now,
+  List<Duration>? recoveryRetryDelays,
 }) => HarvestScheduler(
   api: api,
   farmState: farmState,
@@ -111,6 +124,7 @@ HarvestScheduler _build({
   harvestLog: harvestLog,
   connectionStore: ConnectionStateStore(),
   now: now,
+  recoveryRetryDelays: recoveryRetryDelays,
 );
 
 void main() {
@@ -251,6 +265,219 @@ void main() {
       // 无新触发源（mature Timer 单次、fallback 5min），短时间内不再收菜。
       async.elapse(const Duration(seconds: 10));
       async.flushMicrotasks();
+      expect(api.harvestCalls, 1);
+
+      scheduler.stop();
+    });
+  });
+
+  test('recoverAndReschedule 立即补收（系统唤醒）', () {
+    fakeAsync((async) {
+      var wallClock = DateTime(2026, 8, 14, 10, 0, 0);
+      final api = _RecordingApi(now: () => wallClock)
+        ..matureAt = wallClock.add(const Duration(seconds: 45));
+      final farmState = FarmState(api, now: () => wallClock);
+      final scheduler = _build(
+        api: api,
+        farmState: farmState,
+        settings: settings,
+        harvestLog: harvestLog,
+        now: () => wallClock,
+      );
+
+      scheduler.start();
+      async.flushMicrotasks();
+      expect(api.harvestCalls, 0);
+
+      // 模拟休眠：墙钟跳 10 分钟（作物已成熟），但 fake Timer 不触发。
+      wallClock = wallClock.add(const Duration(minutes: 10));
+
+      scheduler.recoverAndReschedule(RecoveryReason.powerResume);
+      async.flushMicrotasks();
+      expect(api.harvestCalls, 1);
+
+      scheduler.stop();
+    });
+  });
+
+  test('网络失败有限重试后成功恢复', () {
+    fakeAsync((async) {
+      var wallClock = DateTime(2026, 8, 14, 10, 0, 0);
+      final api = _RecordingApi(now: () => wallClock)
+        ..matureAt = wallClock.add(const Duration(seconds: 45));
+      final farmState = FarmState(api, now: () => wallClock);
+      final scheduler = _build(
+        api: api,
+        farmState: farmState,
+        settings: settings,
+        harvestLog: harvestLog,
+        now: () => wallClock,
+        recoveryRetryDelays: const [
+          Duration(milliseconds: 10),
+          Duration(milliseconds: 10),
+        ],
+      );
+
+      scheduler.start();
+      async.flushMicrotasks();
+      expect(api.harvestCalls, 0);
+
+      wallClock = wallClock.add(const Duration(minutes: 10));
+      api.failFetchN = 2;
+
+      scheduler.recoverAndReschedule(RecoveryReason.powerResume);
+      async.flushMicrotasks();
+      expect(api.harvestCalls, 0); // 第一次 fetch 失败，等待重试
+
+      async.elapse(const Duration(milliseconds: 10));
+      async.flushMicrotasks();
+      expect(api.harvestCalls, 0); // 第二次 fetch 失败
+
+      async.elapse(const Duration(milliseconds: 10));
+      async.flushMicrotasks();
+      expect(api.harvestCalls, 1); // 第三次 fetch 成功 → 补收
+      expect(api.failFetchN, 0);
+
+      scheduler.stop();
+    });
+  });
+
+  test('认证失效不重试', () {
+    fakeAsync((async) {
+      var wallClock = DateTime(2026, 8, 14, 10, 0, 0);
+      final api = _RecordingApi(now: () => wallClock)
+        ..matureAt = wallClock.add(const Duration(hours: 1));
+      final farmState = FarmState(api, now: () => wallClock);
+      final scheduler = _build(
+        api: api,
+        farmState: farmState,
+        settings: settings,
+        harvestLog: harvestLog,
+        now: () => wallClock,
+        recoveryRetryDelays: const [
+          Duration(milliseconds: 10),
+          Duration(milliseconds: 10),
+        ],
+      );
+
+      scheduler.start();
+      async.flushMicrotasks();
+      final callsBefore = api.fetchCropsCalls;
+
+      wallClock = wallClock.add(const Duration(minutes: 10));
+      api.failAuth = true;
+
+      scheduler.recoverAndReschedule(RecoveryReason.powerResume);
+      async.flushMicrotasks();
+      expect(api.fetchCropsCalls, callsBefore + 1); // 只尝试一次，不重试
+      expect(api.harvestCalls, 0);
+
+      async.elapse(const Duration(seconds: 60));
+      async.flushMicrotasks();
+      expect(api.fetchCropsCalls, callsBefore + 1);
+
+      scheduler.stop();
+    });
+  });
+
+  test('重试期间认证失效立即停止', () {
+    fakeAsync((async) {
+      var wallClock = DateTime(2026, 8, 14, 10, 0, 0);
+      final api = _RecordingApi(now: () => wallClock)
+        ..matureAt = wallClock.add(const Duration(hours: 1));
+      final farmState = FarmState(api, now: () => wallClock);
+      final scheduler = _build(
+        api: api,
+        farmState: farmState,
+        settings: settings,
+        harvestLog: harvestLog,
+        now: () => wallClock,
+        recoveryRetryDelays: const [
+          Duration(milliseconds: 10),
+          Duration(milliseconds: 10),
+        ],
+      );
+
+      scheduler.start();
+      async.flushMicrotasks();
+
+      wallClock = wallClock.add(const Duration(minutes: 10));
+      api.failFetchN = 1;
+
+      scheduler.recoverAndReschedule(RecoveryReason.powerResume);
+      async.flushMicrotasks();
+      expect(api.fetchCropsCalls, 2); // start 1 次 + 第一次网络失败
+
+      api.failAuth = true; // 重试时认证失效
+
+      async.elapse(const Duration(milliseconds: 10));
+      async.flushMicrotasks();
+      expect(api.fetchCropsCalls, 3); // 只到第二次尝试
+      expect(api.harvestCalls, 0);
+
+      async.elapse(const Duration(seconds: 60));
+      async.flushMicrotasks();
+      expect(api.fetchCropsCalls, 3); // 不再重试
+
+      scheduler.stop();
+    });
+  });
+
+  test('timer-gap 检测触发恢复（系统休眠，独立墙钟）', () {
+    fakeAsync((async) {
+      var wallClock = DateTime(2026, 8, 14, 10, 0, 0);
+      final api = _RecordingApi(now: () => wallClock)
+        ..matureAt = wallClock.add(const Duration(hours: 1));
+      final farmState = FarmState(api, now: () => wallClock);
+      final scheduler = _build(
+        api: api,
+        farmState: farmState,
+        settings: settings,
+        harvestLog: harvestLog,
+        now: () => wallClock,
+      );
+
+      scheduler.start();
+      async.flushMicrotasks();
+      expect(api.harvestCalls, 0);
+
+      // 模拟休眠：墙钟跳 10 小时，但 fallback Timer 只恢复执行一次。
+      wallClock = wallClock.add(const Duration(hours: 10));
+
+      // 只推进 5 分钟 fake 时间：成熟 Timer（1h）不触发，fallback tick 检测到 gap。
+      async.elapse(kHarvestFallbackInterval);
+      async.flushMicrotasks();
+      expect(api.harvestCalls, 1);
+
+      scheduler.stop();
+    });
+  });
+
+  test('并发恢复入口 single-flight：只执行一轮', () {
+    fakeAsync((async) {
+      var wallClock = DateTime(2026, 8, 14, 10, 0, 0);
+      final api = _RecordingApi(now: () => wallClock)
+        ..matureAt = wallClock.add(const Duration(hours: 1));
+      final farmState = FarmState(api, now: () => wallClock);
+      final scheduler = _build(
+        api: api,
+        farmState: farmState,
+        settings: settings,
+        harvestLog: harvestLog,
+        now: () => wallClock,
+      );
+
+      scheduler.start();
+      async.flushMicrotasks();
+
+      wallClock = wallClock.add(const Duration(hours: 10));
+
+      // 三个入口同时触发：合并为至多一个补跑，30s 守卫 + single-flight 兜底。
+      scheduler.recoverAndReschedule(RecoveryReason.powerResume);
+      scheduler.recoverAndReschedule(RecoveryReason.foreground);
+      scheduler.recoverAndReschedule(RecoveryReason.timerGap);
+      async.flushMicrotasks();
+
       expect(api.harvestCalls, 1);
 
       scheduler.stop();
