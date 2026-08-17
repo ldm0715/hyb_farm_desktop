@@ -63,7 +63,7 @@ const int kFriendsPageSize = 5;
 const Duration kFriendDetailCache = Duration(minutes: 2);
 
 /// 应用版本号（展示于设置页「关于与数据」，需与 pubspec.yaml 的 version 手动同步）。
-const String kAppVersion = '0.1.3';
+const String kAppVersion = '0.1.4';
 
 /// 安装包下载时的响应超时兜底（覆盖 BaseOptions 的 15s；dio 5.11 中仅作用于响应头部，
 /// 主要用于兜慢网络/慢 CDN 场景，不中断 body 流式读取）。

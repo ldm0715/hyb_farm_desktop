@@ -1,7 +1,7 @@
 name: hyb_farm_desktop
 description: "黑与白农场助手的 Flutter 桌面客户端"
 publish_to: 'none'
-version: 0.1.3
+version: 0.1.4
 
 environment:
   sdk: ^3.10.7
