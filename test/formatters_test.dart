@@ -55,4 +55,14 @@ void main() {
     );
     expect(maskCookie('flag'), 'flag=•••');
   });
+
+  test('formatBytes 字节人性化', () {
+    expect(formatBytes(0), '0 B');
+    expect(formatBytes(512), '512 B');
+    expect(formatBytes(1024), '1.0 KB');
+    expect(formatBytes(1536), '1.5 KB');
+    expect(formatBytes(1048576), '1.0 MB');
+    expect(formatBytes(1572864), '1.5 MB');
+    expect(formatBytes(1073741824), '1.0 GB');
+  });
 }

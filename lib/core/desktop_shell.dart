@@ -33,3 +33,10 @@ Future<void> openUrl(String url) async {
     AppLog.w('Shell', '打开链接失败', {'url': url, 'error': e.toString()});
   }
 }
+
+/// 以脱离进程组方式启动安装程序（`DETACHED_PROCESS`），应用随后退出子进程仍存活。
+///
+/// 与 `openUrl`/`openDirectory` 的「吞异常静默记录」不同，这里**刻意抛出**——调用方要
+/// 据此决定是否留在对话框内（启动失败时让用户重试，而不退出应用）。
+Future<Process> launchInstaller(String exePath) =>
+    Process.start(exePath, const [], mode: ProcessStartMode.detached);

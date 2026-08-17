@@ -24,6 +24,7 @@ import 'services/notification_service.dart';
 import 'services/power_service.dart';
 import 'services/recycle_service.dart';
 import 'services/replant_service.dart';
+import 'services/update_service.dart';
 import 'state/connection_state_store.dart';
 import 'state/farm_state.dart';
 import 'state/friend_state.dart';
@@ -38,6 +39,12 @@ Future<void> main() async {
   final supportDir = await getApplicationSupportDirectory();
   final logRoot = await SettingsState.loadLogDirectory() ?? supportDir.path;
   await AppLogger.instance.init(directory: logRoot);
+
+  // 启动时清理专用 updates 目录中的旧安装包（只删本服务下载的 .exe/.part，杜绝误删无关
+  // 文件）。新版安装后经安装器 [Run] postinstall 自启，会在这里把安装包清掉。放 logger
+  // init 之后以便清理失败能记日志。
+  final updater = UpdateService(updatesDir: updatesDirFor(supportDir.path));
+  await updater.cleanupStaleInstallers();
 
   // 全局未捕获异常：框架层与平台层（root isolate）都落入文件日志。
   FlutterError.onError = (details) {
@@ -149,6 +156,8 @@ Future<void> main() async {
       connectionStore: connectionStore,
       challengeVerifier: challengeVerifier,
       power: power,
+      updater: updater,
+      trayManager: trayManager,
     ),
   );
 }

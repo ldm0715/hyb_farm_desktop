@@ -15,10 +15,12 @@ import 'package:hyb_farm_desktop/services/notification_service.dart';
 import 'package:hyb_farm_desktop/services/power_service.dart';
 import 'package:hyb_farm_desktop/services/recycle_service.dart';
 import 'package:hyb_farm_desktop/services/replant_service.dart';
+import 'package:hyb_farm_desktop/services/update_service.dart';
 import 'package:hyb_farm_desktop/state/connection_state_store.dart';
 import 'package:hyb_farm_desktop/state/farm_state.dart';
 import 'package:hyb_farm_desktop/state/friend_state.dart';
 import 'package:hyb_farm_desktop/state/settings_state.dart';
+import 'package:hyb_farm_desktop/tray/tray_manager.dart';
 import 'package:hyb_farm_desktop/ui/app_theme.dart';
 import 'package:hyb_farm_desktop/ui/login_page.dart';
 import 'package:hyb_farm_desktop/ui/root_shell.dart';
@@ -42,6 +44,8 @@ class HybFarmApp extends StatelessWidget {
     required this.connectionStore,
     required this.challengeVerifier,
     required this.power,
+    required this.updater,
+    required this.trayManager,
   });
 
   final FarmApi api;
@@ -60,6 +64,8 @@ class HybFarmApp extends StatelessWidget {
   final ConnectionStateStore connectionStore;
   final ChallengeVerifier challengeVerifier;
   final PowerService power;
+  final UpdateService updater;
+  final TrayManager trayManager;
 
   @override
   Widget build(BuildContext context) {
@@ -83,6 +89,8 @@ class HybFarmApp extends StatelessWidget {
         ),
         Provider<ChallengeVerifier>.value(value: challengeVerifier),
         Provider<PowerService>.value(value: power),
+        Provider<UpdateService>.value(value: updater),
+        Provider<TrayManager>.value(value: trayManager),
       ],
       child: const _MaterialApp(),
     );

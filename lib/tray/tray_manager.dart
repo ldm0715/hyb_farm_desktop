@@ -162,6 +162,9 @@ class TrayManager extends WindowListener {
     await windowManager.destroy();
   }
 
+  /// 公开退出入口：托盘菜单「退出」与更新后启动安装器共用。
+  Future<void> quit() => _exit();
+
   @override
   void onWindowClose() async {
     if (settings.closeBehavior == CloseBehavior.minimizeToTray) {

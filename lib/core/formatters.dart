@@ -71,6 +71,19 @@ String formatPerHour(double value) {
   return '\$$trimmed';
 }
 
+/// 字节数 → B/KB/MB/GB 人性化文本（下载进度 / 安装包大小展示用）。
+String formatBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  var value = bytes.toDouble();
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  var unitIndex = -1;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  return '${value.toStringAsFixed(value >= 100 ? 0 : 1)} ${units[unitIndex]}';
+}
+
 /// Cookie header 脱敏：保留 key、遮蔽 value，绝不回显明文。
 String maskCookie(String cookie) {
   final masked = cookie

@@ -32,7 +32,6 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   Timer? _tickTimer;
-  final UpdateService _updater = UpdateService();
   bool _checkingUpdate = false;
 
   @override
@@ -301,9 +300,10 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _checkUpdate(BuildContext context) async {
     setState(() => _checkingUpdate = true);
     try {
-      final info = await _updater.fetchLatest();
+      final updater = context.read<UpdateService>();
+      final info = await updater.fetchLatest();
       if (!context.mounted) return;
-      if (_updater.hasUpdate(info)) {
+      if (updater.hasUpdate(info)) {
         await showUpdateDialog(context, info);
       } else {
         await showUpToDateDialog(context, kAppVersion);
