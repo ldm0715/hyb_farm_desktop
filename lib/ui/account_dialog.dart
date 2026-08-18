@@ -12,6 +12,7 @@ import 'package:hyb_farm_desktop/services/challenge_verifier.dart';
 import 'package:hyb_farm_desktop/state/connection_state_store.dart';
 import 'package:hyb_farm_desktop/theme/farm_theme.dart';
 import 'package:hyb_farm_desktop/ui/challenge_dialog.dart';
+import 'package:hyb_farm_desktop/ui/widgets/vip_avatar.dart';
 
 /// 打开账户与安全详情对话框。
 Future<void> showAccountDialog(BuildContext context) {
@@ -125,6 +126,7 @@ class _AccountDialogState extends State<_AccountDialog> {
               _StatusHeader(
                 username: auth.username,
                 avatar: auth.avatar,
+                isVip: auth.isVip,
                 statusColor: statusColor,
                 statusText: state.accountSubtitle,
               ),
@@ -183,12 +185,14 @@ class _StatusHeader extends StatelessWidget {
   const _StatusHeader({
     required this.username,
     required this.avatar,
+    required this.isVip,
     required this.statusColor,
     required this.statusText,
   });
 
   final String username;
   final String avatar;
+  final bool isVip;
   final Color statusColor;
   final String statusText;
 
@@ -197,22 +201,11 @@ class _StatusHeader extends StatelessWidget {
     final colors = FarmColorScheme.of(context);
     return Row(
       children: [
-        ClipOval(
-          child: SizedBox(
-            width: 44,
-            height: 44,
-            child: avatar.isEmpty
-                ? Icon(Icons.person, color: colors.textSecondary, size: 28)
-                : Image.network(
-                    avatar,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => Icon(
-                      Icons.person,
-                      color: colors.textSecondary,
-                      size: 28,
-                    ),
-                  ),
-          ),
+        VipAvatar(
+          avatar: avatar,
+          size: 44,
+          isVip: isVip,
+          iconSize: 28,
         ),
         const SizedBox(width: FarmSpacing.sm),
         Expanded(

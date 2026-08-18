@@ -224,4 +224,14 @@ void main() {
     expect(info.username, 'Alice');
     expect(info.avatar, 'https://cdn.example.com/a.png');
   });
+
+  test('fetchDashboardStats 取 data 对象（walletBalance / vipInfo.isVip）', () async {
+    final api = _api({
+      '/api/dashboard/stats':
+          '{"success":true,"data":{"walletBalance":18542118626,"checkinStatus":{"hasCheckedToday":true,"consecutiveDays":104,"todayReward":60000000},"vipInfo":{"isVip":true,"vipType":"SUPER_GAMER","endDate":"2026-09-10T11:33:18.057Z","remainingDays":24}}}',
+    });
+    final stats = await api.fetchDashboardStats();
+    expect(stats.walletBalance, 18542118626);
+    expect(stats.isVip, isTrue);
+  });
 }

@@ -12,6 +12,8 @@ void main() {
     expect(formatMoneyGrouped(500000), '\$1.00');
     expect(formatMoneyGrouped(0), '\$0.00');
     expect(formatMoneyGrouped(617283500000), '\$1,234,567.00');
+    // 账户总余额场景：walletBalance 原始整数 ÷ 500000，2 位小数。
+    expect(formatMoneyGrouped(18542118626), '\$37,084.24');
   });
 
   test('formatCountdown 格式化秒数', () {

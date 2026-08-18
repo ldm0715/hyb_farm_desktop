@@ -218,6 +218,12 @@ class FarmApi {
     return UserInfo.fromJson(user);
   }
 
+  /// 账户统计（VIP / 余额）。`{ data: { walletBalance, vipInfo: { isVip } } }`。
+  Future<DashboardStats> fetchDashboardStats() async {
+    final json = await _client.get('/api/dashboard/stats');
+    return DashboardStats.fromJson(_dataMap(_asMap(json)));
+  }
+
   Map<String, dynamic> _asMap(dynamic v) =>
       v is Map<String, dynamic> ? v : const {};
 

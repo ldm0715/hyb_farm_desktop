@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:hyb_farm_desktop/api/api_client.dart';
 import 'package:hyb_farm_desktop/api/models.dart';
+import 'package:hyb_farm_desktop/auth/auth_service.dart';
 import 'package:hyb_farm_desktop/core/formatters.dart';
 import 'package:hyb_farm_desktop/core/operation_coordinator.dart';
 import 'package:hyb_farm_desktop/core/ranking.dart';
@@ -66,6 +67,7 @@ class _WarehousePageState extends State<WarehousePage> {
   Future<void> _sellSelected() async {
     final farmState = context.read<FarmState>();
     final recycle = context.read<RecycleService>();
+    final auth = context.read<AuthService>();
     final entries = _selectedEntries(farmState);
     if (entries.isEmpty) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -74,6 +76,8 @@ class _WarehousePageState extends State<WarehousePage> {
     try {
       final messages = await recycle.sellSelected(entries);
       await farmState.refreshInventory(force: true);
+      // 卖出后账户余额变化，主动刷新一次（事件驱动，无缓存节流）。
+      await auth.loadDashboardStats();
       setState(() => _selected.clear());
       messenger.showSnackBar(
         SnackBar(

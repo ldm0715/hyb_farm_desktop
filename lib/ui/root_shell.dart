@@ -24,6 +24,7 @@ import 'package:hyb_farm_desktop/ui/farm_page.dart';
 import 'package:hyb_farm_desktop/ui/friends_page.dart';
 import 'package:hyb_farm_desktop/ui/settings_page.dart';
 import 'package:hyb_farm_desktop/ui/warehouse_page.dart';
+import 'package:hyb_farm_desktop/ui/widgets/vip_avatar.dart';
 
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
@@ -220,6 +221,7 @@ class _RootShellState extends State<RootShell>
 
   Future<void> _refresh() async {
     final farmState = context.read<FarmState>();
+    final auth = context.read<AuthService>();
     final friendState = _tabController.index == 2
         ? context.read<FriendState>()
         : null;
@@ -228,6 +230,7 @@ class _RootShellState extends State<RootShell>
       await farmState.refresh(force: true);
       await farmState.loadSeeds(force: true);
       await farmState.loadPrices(force: true);
+      await auth.loadDashboardStats();
       if (friendState != null) {
         await friendState.refresh(force: true);
       }
@@ -404,26 +407,11 @@ class _HeaderBar extends StatelessWidget {
             InkWell(
               onTap: () => showAccountDialog(context),
               borderRadius: BorderRadius.circular(FarmSizes.brandIcon),
-              child: ClipOval(
-                child: SizedBox(
-                  width: FarmSizes.brandIcon,
-                  height: FarmSizes.brandIcon,
-                  child: auth.avatar.isEmpty
-                      ? Icon(
-                          Icons.person,
-                          color: colors.textSecondary,
-                          size: 22,
-                        )
-                      : Image.network(
-                          auth.avatar,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => Icon(
-                            Icons.person,
-                            color: colors.textSecondary,
-                            size: 22,
-                          ),
-                        ),
-                ),
+              child: VipAvatar(
+                avatar: auth.avatar,
+                size: FarmSizes.brandIcon,
+                isVip: auth.isVip,
+                iconSize: 22,
               ),
             ),
             const SizedBox(width: FarmSpacing.sm),

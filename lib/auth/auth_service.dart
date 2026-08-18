@@ -44,6 +44,11 @@ class AuthService extends ChangeNotifier {
   String get username => _userInfo?.username ?? '';
   String get avatar => _userInfo?.avatar ?? '';
 
+  /// 最近一次成功加载的账户统计（VIP / 余额），来自 `/api/dashboard/stats`。
+  DashboardStats? _stats;
+  bool get isVip => _stats?.isVip ?? false;
+  int get walletBalance => _stats?.walletBalance ?? 0;
+
   /// 校验 Cookie 格式：非空、含 key=value、不含换行等控制字符。
   static String? validateCookie(String? cookie) {
     final c = cookie?.trim() ?? '';
@@ -83,8 +88,11 @@ class AuthService extends ChangeNotifier {
     _client.setCookie(cookie);
     _status = AuthStatus.authenticated;
     _lastLoginAt = DateTime.now().toIso8601String();
+    // 账号切换（换 Cookie 登录）：先清旧账号统计，避免短暂显示 A 的 VIP/余额。
+    _stats = null;
     notifyListeners();
     unawaited(loadUserInfo());
+    unawaited(loadDashboardStats());
   }
 
   /// 拉取当前登录用户信息（用户名/头像）。失败静默，不改变认证状态。
@@ -96,6 +104,19 @@ class AuthService extends ChangeNotifier {
       notifyListeners();
     } on Exception {
       // 网络/未登录等失败均忽略，保持上一次的值或空。
+    }
+  }
+
+  /// 拉取账户统计（VIP / 余额）。事件驱动、无缓存节流：每次调用拉最新。
+  /// 失败静默，不改变认证状态、不触发 authRequired。
+  Future<void> loadDashboardStats() async {
+    final api = _api;
+    if (api == null) return;
+    try {
+      _stats = await api.fetchDashboardStats();
+      notifyListeners();
+    } on Exception {
+      // 静默失败：保持旧值或空；不改变认证状态。
     }
   }
 
@@ -151,6 +172,7 @@ class AuthService extends ChangeNotifier {
     final ok = await testCookie(cookie);
     if (ok) {
       unawaited(loadUserInfo());
+      unawaited(loadDashboardStats());
     }
     return ok;
   }
@@ -169,6 +191,7 @@ class AuthService extends ChangeNotifier {
     _status = AuthStatus.expired;
     _lastLoginAt = null;
     _userInfo = null;
+    _stats = null;
     notifyListeners();
   }
 }

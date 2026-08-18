@@ -406,6 +406,27 @@ class UserInfo {
   );
 }
 
+/// 账户统计（`/api/dashboard/stats` 的 `data`）。
+class DashboardStats {
+  const DashboardStats({this.walletBalance = 0, this.isVip = false});
+
+  /// 账户总余额（原始整数，展示时除以 [kPriceDivisor]）。
+  final int walletBalance;
+
+  /// 是否为 VIP（`data.vipInfo.isVip`）。
+  final bool isVip;
+
+  factory DashboardStats.fromJson(Map<String, dynamic> json) {
+    final v = json['vipInfo'];
+    final vip = v is Map<String, dynamic> ? v : const <String, dynamic>{};
+    // vipInfo 的 vipType/endDate/remainingDays 暂无消费方，先不解析。
+    return DashboardStats(
+      walletBalance: (json['walletBalance'] as num?)?.toInt() ?? 0,
+      isVip: vip['isVip'] as bool? ?? false,
+    );
+  }
+}
+
 /// 好友第一块地的摘要信息（偷菜判定只看第一块地）。
 class FriendFirstCrop {
   const FriendFirstCrop({

@@ -22,6 +22,7 @@ import 'log_directory_dialog.dart';
 import 'log_viewer_dialog.dart';
 import 'update_dialog.dart';
 import 'widgets/farm_icon.dart';
+import 'widgets/vip_avatar.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -361,22 +362,11 @@ class _AccountStatusCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            ClipOval(
-              child: SizedBox(
-                width: 40,
-                height: 40,
-                child: auth.avatar.isEmpty
-                    ? Icon(Icons.person, color: colors.textSecondary, size: 26)
-                    : Image.network(
-                        auth.avatar,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => Icon(
-                          Icons.person,
-                          color: colors.textSecondary,
-                          size: 26,
-                        ),
-                      ),
-              ),
+            VipAvatar(
+              avatar: auth.avatar,
+              size: 40,
+              isVip: auth.isVip,
+              iconSize: 26,
             ),
             const SizedBox(width: FarmSpacing.sm),
             Expanded(
@@ -396,6 +386,34 @@ class _AccountStatusCard extends StatelessWidget {
                       color: statusColor,
                     ),
                   ),
+                  if (auth.status == AuthStatus.authenticated) ...[
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Text(
+                          '账户余额',
+                          style: FarmTextStyles.settingDescription.copyWith(
+                            color: colors.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        InkWell( // 点击金额手动刷新余额
+                          onTap: () => auth.loadDashboardStats(),
+                          borderRadius: BorderRadius.circular(4),
+                          child: Text(
+                            formatMoneyGrouped(auth.walletBalance),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: FarmTextStyles.numericValue(
+                              FarmTextStyles.settingValue.copyWith(
+                                color: colors.textPrimary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
