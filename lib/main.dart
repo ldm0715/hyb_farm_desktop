@@ -18,6 +18,7 @@ import 'core/request_backoff.dart';
 import 'services/auto_care_service.dart';
 import 'services/care_log.dart';
 import 'services/challenge_verifier.dart';
+import 'services/daily_summary_store.dart';
 import 'services/harvest_log.dart';
 import 'services/harvest_scheduler.dart';
 import 'services/notification_service.dart';
@@ -86,7 +87,13 @@ Future<void> main() async {
   }
   // 价格趋势存储：服务器 UTC 自然日一天一次（重启不重置）；单账号模型不传 accountId。
   final priceTrendStore = await PriceTrendStore.create();
-  final farmState = FarmState(farmApi, priceTrendStore: priceTrendStore);
+  // 每日日报存储：服务器 UTC 自然日一天成功一次（失败按最小间隔重试、重启不重置）。
+  final dailySummaryStore = await DailySummaryStore.create();
+  final farmState = FarmState(
+    farmApi,
+    priceTrendStore: priceTrendStore,
+    dailySummaryStore: dailySummaryStore,
+  );
   final coordinator = OperationCoordinator();
   final replant = ReplantService(api: farmApi);
   final recycleService = RecycleService(api: farmApi, coordinator: coordinator);

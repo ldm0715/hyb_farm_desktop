@@ -263,4 +263,38 @@ void main() {
     expect(stats.walletBalance, 18542118626);
     expect(stats.isVip, isTrue);
   });
+
+  test('fetchDailySummary 取 data 对象（summary / periodDate / topStealers）', () async {
+    final api = _api({
+      '/api/farm/daily-summary':
+          '{"success":true,"data":{"summary":{"date":"2026-08-17","stolen":{"totalQuantity":47,"cropsReturned":0,"quotaPenalty":"0.00","stealerCount":1,"topStealers":[{"userId":"u1","username":"yanzexi","quantity":47}]},"helped":{"helperCount":0,"processedTotal":0,"topHelpers":[]},"hasContent":true},"shouldAutoShow":false,"periodDate":"2026-08-18"}}',
+    });
+    final s = await api.fetchDailySummary();
+    expect(s.periodDate, '2026-08-18');
+    expect(s.shouldAutoShow, isFalse);
+    expect(s.summary.date, '2026-08-17');
+    expect(s.summary.hasContent, isTrue);
+    expect(s.summary.stolen.totalQuantity, 47);
+    expect(s.summary.stolen.stealerCount, 1);
+    expect(s.summary.stolen.topStealers.single.username, 'yanzexi');
+    expect(s.summary.stolen.topStealers.single.quantity, 47);
+    expect(s.summary.helped.helperCount, 0);
+    expect(s.summary.helped.topHelpers, isEmpty);
+  });
+
+  test('fetchDailySummary 防御解析：非法元素跳过、类型不符不抛', () async {
+    final api = _api({
+      '/api/farm/daily-summary':
+          '{"success":true,"data":{"summary":{"date":12345,"stolen":{"totalQuantity":47,"topStealers":[null,{"userId":"u1","username":"yanzexi","quantity":47},{"username":42}]},"helped":{"topHelpers":"bad"},"hasContent":true},"shouldAutoShow":"false","periodDate":20260818}}',
+    });
+    final s = await api.fetchDailySummary();
+    expect(s.periodDate, '20260818'); // 数字 → toString 兜底
+    expect(s.summary.date, '12345');
+    expect(s.summary.stolen.totalQuantity, 47);
+    expect(s.summary.stolen.topStealers.length, 2); // null 元素被跳过
+    expect(s.summary.stolen.topStealers.first.username, 'yanzexi');
+    expect(s.summary.stolen.topStealers.first.quantity, 47);
+    expect(s.summary.stolen.topStealers.last.username, '42'); // 数字名 → toString
+    expect(s.summary.helped.topHelpers, isEmpty); // 非列表 → 空
+  });
 }

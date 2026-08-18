@@ -32,6 +32,9 @@ const Duration kFriendsListCacheTtl = Duration(minutes: 5);
 /// 价格趋势缓存陈旧阈值；请求频率仍由服务器 UTC 自然日门控（不是「24h 时间下限」）。
 const Duration kPriceTrendStaleAfter = Duration(hours: 24);
 
+/// 每日日报失败重试最小间隔（当天成功一次即停；失败后隔此间隔才重试，防刷）。
+const Duration kDailySummaryRetryInterval = Duration(minutes: 30);
+
 /// 资源请求最小间隔（决定两次实际请求之间的最短间隔，失败也更新）。
 const Duration kMinRequestInterval = Duration(seconds: 15);
 

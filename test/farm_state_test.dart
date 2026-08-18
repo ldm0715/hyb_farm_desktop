@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hyb_farm_desktop/api/api_client.dart';
 import 'package:hyb_farm_desktop/api/farm_api.dart';
 import 'package:hyb_farm_desktop/api/models.dart';
+import 'package:hyb_farm_desktop/services/daily_summary_store.dart';
 import 'package:hyb_farm_desktop/services/price_trend_store.dart';
 import 'package:hyb_farm_desktop/state/farm_state.dart';
 
@@ -18,6 +19,7 @@ class _FakeFarmApi extends FarmApi {
     this.inventory = const [],
     this.recyclePrices = const [],
     this.priceTrendsResult,
+    this.dailySummaryResult,
   }) : super(ApiClient());
 
   CropsResponse crops;
@@ -28,6 +30,10 @@ class _FakeFarmApi extends FarmApi {
   PriceTrends? priceTrendsResult;
   bool failTrendFetch = false;
   int trendFetchCalls = 0;
+
+  DailySummary? dailySummaryResult;
+  bool failSummaryFetch = false;
+  int summaryFetchCalls = 0;
 
   @override
   Future<CropsResponse> fetchCrops() async => crops;
@@ -48,6 +54,13 @@ class _FakeFarmApi extends FarmApi {
     if (failTrendFetch) throw Exception('network');
     return priceTrendsResult ?? const PriceTrends();
   }
+
+  @override
+  Future<DailySummary> fetchDailySummary() async {
+    summaryFetchCalls++;
+    if (failSummaryFetch) throw Exception('network');
+    return dailySummaryResult ?? const DailySummary(summary: DailySummaryData());
+  }
 }
 
 /// recordAttempt 持久化失败的 Store：模拟 setString 失败场景（不真发网络请求）。
@@ -56,6 +69,16 @@ class _ThrowingTrendStore extends PriceTrendStore {
 
   @override
   Future<void> recordAttempt(CachedPriceTrendState s) async {
+    throw Exception('persist failed');
+  }
+}
+
+/// recordAttempt 持久化失败的日报 Store：模拟 setString 失败场景（不真发网络请求）。
+class _ThrowingDailySummaryStore extends DailySummaryStore {
+  _ThrowingDailySummaryStore(super.prefs, super.key);
+
+  @override
+  Future<void> recordAttempt(CachedDailySummaryState s) async {
     throw Exception('persist failed');
   }
 }
@@ -367,6 +390,132 @@ void main() {
       final state = makeState(_ThrowingTrendStore(prefs, PriceTrendStore.keyFor(null)));
       await state.loadPriceTrend();
       expect(api.trendFetchCalls, 0);
+    });
+  });
+
+  group('每日日报：服务器 UTC 自然日一天成功一次', () {
+    late SharedPreferences prefs;
+    late _FakeFarmApi api;
+    late DateTime clock;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      prefs = await SharedPreferences.getInstance();
+      // 服务器 8/18 生成的 8/17 日报；本地时钟 8/18 12:00。
+      api = _FakeFarmApi(
+        dailySummaryResult: const DailySummary(
+          summary: DailySummaryData(
+            date: '2026-08-17',
+            stolen: StolenSummary(totalQuantity: 47, stealerCount: 1),
+            helped: HelpedSummary(),
+            hasContent: true,
+          ),
+          shouldAutoShow: false,
+          periodDate: '2026-08-18',
+        ),
+      );
+      clock = DateTime.utc(2026, 8, 18, 12);
+    });
+
+    DailySummaryStore makeStore() =>
+        DailySummaryStore(prefs, DailySummaryStore.keyFor(null));
+
+    FarmState makeState([DailySummaryStore? store]) => FarmState(
+      api,
+      now: () => clock,
+      dailySummaryStore: store ?? makeStore(),
+    );
+
+    test('懒加载一次；同日再次 loadDailySummary 不重拉', () async {
+      final state = makeState();
+      await state.loadDailySummary();
+      expect(api.summaryFetchCalls, 1);
+      expect(state.dailySummary?.periodDate, '2026-08-18');
+
+      await state.loadDailySummary();
+      expect(api.summaryFetchCalls, 1); // 当天已成功 + 已缓存
+    });
+
+    test('失败后间隔内不重试、满间隔可重试', () async {
+      api.failSummaryFetch = true;
+      final state = makeState();
+      await state.loadDailySummary();
+      expect(api.summaryFetchCalls, 1);
+
+      await state.loadDailySummary(); // 间隔内 → 不重试
+      expect(api.summaryFetchCalls, 1);
+
+      api.failSummaryFetch = false;
+      clock = clock.add(const Duration(minutes: 31)); // 满 30min
+      await state.loadDailySummary();
+      expect(api.summaryFetchCalls, 2);
+      expect(state.dailySummary?.periodDate, '2026-08-18');
+    });
+
+    test('成功同日重启（重建 State+Store 同 prefs）不重拉', () async {
+      final state = makeState();
+      await state.loadDailySummary();
+      expect(api.summaryFetchCalls, 1);
+
+      final restarted = makeState(); // 「重启」：同 prefs 新 store + state
+      await restarted.loadDailySummary();
+      expect(api.summaryFetchCalls, 1); // 持久化成功日阻止同日重拉
+      expect(restarted.dailySummary?.periodDate, '2026-08-18'); // 恢复缓存
+    });
+
+    test('次日允许重新请求', () async {
+      final state = makeState();
+      await state.loadDailySummary();
+      expect(api.summaryFetchCalls, 1);
+
+      clock = DateTime.utc(2026, 8, 19, 12);
+      await state.loadDailySummary();
+      expect(api.summaryFetchCalls, 2);
+    });
+
+    test('刷新路径结构性隔离：loadPrices(force) + refresh(force) 不触发日报', () async {
+      final store = makeStore(); // 无记录 → 门控允许
+      final state = FarmState(api, now: () => clock, dailySummaryStore: store);
+      expect(store.shouldAttempt(clock), isTrue);
+
+      await state.loadPrices(force: true);
+      expect(api.summaryFetchCalls, 0);
+
+      await state.refresh(force: true);
+      expect(api.summaryFetchCalls, 0);
+    });
+
+    test('recordAttempt 持久化失败 → 不发网络请求', () async {
+      final state = makeState(
+        _ThrowingDailySummaryStore(prefs, DailySummaryStore.keyFor(null)),
+      );
+      await state.loadDailySummary();
+      expect(api.summaryFetchCalls, 0);
+    });
+
+    test('并发两次 loadDailySummary 只发一个请求', () async {
+      final state = makeState();
+      await Future.wait([state.loadDailySummary(), state.loadDailySummary()]);
+      expect(api.summaryFetchCalls, 1);
+    });
+
+    test('periodDate/date 均缺失时不计为成功（满间隔后可重试）', () async {
+      // 无效响应：periodDate 与 date 都为空。
+      api.dailySummaryResult = const DailySummary(summary: DailySummaryData());
+      final state = makeState();
+      await state.loadDailySummary();
+      expect(api.summaryFetchCalls, 1);
+      expect(state.dailySummary, isNull); // 未计为成功
+
+      // 满 30min 后重试，这次返回有效数据。
+      api.dailySummaryResult = const DailySummary(
+        summary: DailySummaryData(date: '2026-08-17', hasContent: true),
+        periodDate: '2026-08-18',
+      );
+      clock = clock.add(const Duration(minutes: 31));
+      await state.loadDailySummary();
+      expect(api.summaryFetchCalls, 2);
+      expect(state.dailySummary?.periodDate, '2026-08-18');
     });
   });
 }

@@ -1,6 +1,8 @@
 /// 农场页：标题行、2×2 指标卡、田地状态区（筛选 + 最多 6 块）、自动化活动摘要。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:hyb_farm_desktop/api/api_client.dart';
@@ -132,6 +134,8 @@ class FarmPage extends StatelessWidget {
         ),
         const SizedBox(height: FarmSpacing.sm),
         _PlotSection(totalSlots: totalSlots),
+        const SizedBox(height: FarmSpacing.sm),
+        const _DailySummaryCard(),
         const SizedBox(height: FarmSpacing.sm),
         const _AutomationActivityCard(),
         if (farmState.lastResult != null) ...[
@@ -583,6 +587,249 @@ class _PlotCard extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// 每日日报卡：常驻显示「昨日被偷/帮忙」摘要，点开展开偷菜 TOP / 帮忙 TOP 明细。
+///
+/// 首次挂载即懒加载日报（`FarmState.loadDailySummary`，服务器 UTC 自然日一天成功
+/// 一次、失败按最小间隔重试、刷新按钮不触发），并周期轮询以覆盖「运行中跨 8 点」。
+class _DailySummaryCard extends StatefulWidget {
+  const _DailySummaryCard();
+
+  @override
+  State<_DailySummaryCard> createState() => _DailySummaryCardState();
+}
+
+class _DailySummaryCardState extends State<_DailySummaryCard> {
+  bool _expanded = false;
+  Timer? _pollTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // 延后到首帧后再触发：恢复缓存时 notifyListeners 若在 build 中同步触发会
+    // 命中「markNeedsBuild called during build」。首帧后触发则安全。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<FarmState>().loadDailySummary();
+    });
+    // 周期轮询（门控是廉价日期比较）：运行中跨 8 点自动拉取新日报。
+    _pollTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) context.read<FarmState>().loadDailySummary();
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = FarmColorScheme.of(context);
+    final summary = context.watch<FarmState>().dailySummary;
+
+    return Container(
+      padding: const EdgeInsets.all(FarmSpacing.sm),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(FarmRadii.card),
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            borderRadius: BorderRadius.circular(FarmRadii.control),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: FarmSpacing.xxs),
+              child: Row(
+                children: [
+                  Text(
+                    '每日日报',
+                    style: FarmTextStyles.sectionTitle.copyWith(
+                      color: colors.textPrimary,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    summary == null ? '—' : _dateLabel(summary),
+                    style: FarmTextStyles.sectionHint.copyWith(
+                      color: colors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(width: FarmSpacing.xxs),
+                  Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                    color: colors.textSecondary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: FarmSpacing.xs),
+          _summaryLine(summary),
+          if (_expanded) ...[
+            const SizedBox(height: FarmSpacing.sm),
+            _detailSection(summary),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _dateLabel(DailySummary summary) {
+    final parts = summary.summary.date.split('-');
+    if (parts.length == 3) {
+      final m = int.tryParse(parts[1]);
+      final d = int.tryParse(parts[2]);
+      if (m != null && d != null) return '$m/$d';
+    }
+    return summary.summary.date.isEmpty ? '—' : summary.summary.date;
+  }
+
+  Widget _summaryLine(DailySummary? summary) {
+    final colors = FarmColorScheme.of(context);
+    if (summary == null) {
+      return Text(
+        '日报加载中…',
+        style: FarmTextStyles.bodySecondary.copyWith(
+          color: colors.textSecondary,
+        ),
+      );
+    }
+    final s = summary.summary;
+    if (!s.hasContent) {
+      return Text(
+        '昨日无偷菜记录',
+        style: FarmTextStyles.bodySecondary.copyWith(
+          color: colors.textSecondary,
+        ),
+      );
+    }
+    return Text(
+      '昨日被偷 ${s.stolen.totalQuantity} 份 · ${s.stolen.stealerCount} 人 · 帮忙 ${s.helped.helperCount} 人',
+      style: FarmTextStyles.bodySecondary.copyWith(
+        color: colors.textPrimary,
+        fontFeatures: kTabularFigures,
+      ),
+    );
+  }
+
+  Widget _detailSection(DailySummary? summary) {
+    final colors = FarmColorScheme.of(context);
+    if (summary == null || !summary.summary.hasContent) {
+      return const SizedBox.shrink();
+    }
+    final stolen = summary.summary.stolen;
+    final helped = summary.summary.helped;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _detailHeader('偷菜 TOP', stolen.stealerCount),
+        const SizedBox(height: FarmSpacing.xs),
+        if (stolen.topStealers.isEmpty)
+          _emptyDetail('无偷菜明细')
+        else
+          Wrap(
+            spacing: FarmSpacing.xs,
+            runSpacing: FarmSpacing.xs,
+            children: [
+              for (final e in stolen.topStealers)
+                _entryChip(e.username, '${e.quantity}', colors.warning),
+            ],
+          ),
+        const SizedBox(height: FarmSpacing.md),
+        _detailHeader('帮忙 TOP', helped.helperCount),
+        const SizedBox(height: FarmSpacing.xs),
+        if (helped.topHelpers.isEmpty)
+          _emptyDetail('无帮忙明细')
+        else
+          Wrap(
+            spacing: FarmSpacing.xs,
+            runSpacing: FarmSpacing.xs,
+            children: [
+              for (final e in helped.topHelpers)
+                _entryChip(e.username, '${e.quantity}', colors.success),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _detailHeader(String title, int count) {
+    final colors = FarmColorScheme.of(context);
+    return Row(
+      children: [
+        Text(
+          title,
+          style: FarmTextStyles.bodySecondary.copyWith(
+            color: colors.textSecondary,
+          ),
+        ),
+        const Spacer(),
+        Text(
+          '$count 人',
+          style: FarmTextStyles.bodyEmphasis.copyWith(
+            color: colors.textPrimary,
+            fontFeatures: kTabularFigures,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _entryChip(String name, String count, Color color) {
+    final colors = FarmColorScheme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: FarmSpacing.xs,
+        vertical: FarmSpacing.xxs,
+      ),
+      decoration: BoxDecoration(
+        color: colors.surfaceSubtle,
+        borderRadius: BorderRadius.circular(FarmRadii.control),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 96),
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: FarmTextStyles.bodySecondary.copyWith(
+                color: colors.textSecondary,
+              ),
+            ),
+          ),
+          const SizedBox(width: FarmSpacing.xxs),
+          Text(
+            count,
+            style: FarmTextStyles.bodyEmphasis.copyWith(
+              color: color,
+              fontFeatures: kTabularFigures,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyDetail(String text) {
+    final colors = FarmColorScheme.of(context);
+    return Text(
+      text,
+      style: FarmTextStyles.bodySecondary.copyWith(
+        color: colors.textSecondary,
       ),
     );
   }

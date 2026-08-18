@@ -271,6 +271,13 @@ class FarmApi {
     return DashboardStats.fromJson(_dataMap(_asMap(json)));
   }
 
+  /// 每日日报（昨日被偷/帮忙汇总）。`{ data: { summary, shouldAutoShow, periodDate } }`。
+  /// 请求频率由 `DailySummaryStore` 按服务器 UTC 自然日门控（一天成功一次、失败可重试）。
+  Future<DailySummary> fetchDailySummary() async {
+    final json = await _client.get('/api/farm/daily-summary');
+    return DailySummary.fromJson(_dataMap(_asMap(json)));
+  }
+
   Map<String, dynamic> _asMap(dynamic v) =>
       v is Map<String, dynamic> ? v : const {};
 

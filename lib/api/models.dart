@@ -569,6 +569,188 @@ class StealResult {
   );
 }
 
+/// 每日日报（`/api/farm/daily-summary` 的 `data`）。
+///
+/// 服务器每天早上 8 点生成前一天的日报：`periodDate` 为当日报表日期
+/// （如 "2026-08-18"），`summary.date` 为数据所属的昨天（如 "2026-08-17"）。
+/// 作为 `DailySummaryStore` 持久化数据载荷，需 `toJson`。
+class DailySummary {
+  const DailySummary({
+    required this.summary,
+    this.shouldAutoShow = false,
+    this.periodDate = '',
+  });
+
+  final DailySummaryData summary;
+
+  /// 服务器「是否自动展示」标志（先存不驱动弹窗）。
+  final bool shouldAutoShow;
+
+  /// 当日报表日期字符串（如 "2026-08-18"）。
+  final String periodDate;
+
+  factory DailySummary.fromJson(Map<String, dynamic> json) {
+    final s = json['summary'];
+    return DailySummary(
+      summary: s is Map<String, dynamic>
+          ? DailySummaryData.fromJson(s)
+          : const DailySummaryData(),
+      shouldAutoShow: _asBool(json['shouldAutoShow']),
+      periodDate: _asString(json['periodDate']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'summary': summary.toJson(),
+    'shouldAutoShow': shouldAutoShow,
+    'periodDate': periodDate,
+  };
+}
+
+/// 日报内容（`summary` 对象）。
+class DailySummaryData {
+  const DailySummaryData({
+    this.date = '',
+    this.stolen = const StolenSummary(),
+    this.helped = const HelpedSummary(),
+    this.hasContent = false,
+  });
+
+  /// 数据所属日期（昨天，如 "2026-08-17"）。
+  final String date;
+
+  final StolenSummary stolen;
+  final HelpedSummary helped;
+  final bool hasContent;
+
+  factory DailySummaryData.fromJson(Map<String, dynamic> json) {
+    final s = json['stolen'];
+    final h = json['helped'];
+    return DailySummaryData(
+      date: _asString(json['date']),
+      stolen: s is Map<String, dynamic>
+          ? StolenSummary.fromJson(s)
+          : const StolenSummary(),
+      helped: h is Map<String, dynamic>
+          ? HelpedSummary.fromJson(h)
+          : const HelpedSummary(),
+      hasContent: _asBool(json['hasContent']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'date': date,
+    'stolen': stolen.toJson(),
+    'helped': helped.toJson(),
+    'hasContent': hasContent,
+  };
+}
+
+/// 昨日被偷汇总。
+class StolenSummary {
+  const StolenSummary({
+    this.totalQuantity = 0,
+    this.cropsReturned = 0,
+    this.quotaPenalty = '',
+    this.stealerCount = 0,
+    this.topStealers = const [],
+  });
+
+  /// 昨日被偷总份数。
+  final int totalQuantity;
+  final int cropsReturned;
+
+  /// 配额罚没（"0.00"，语义待后端确认，先按字符串透传展示）。
+  final String quotaPenalty;
+  final int stealerCount;
+  final List<StealerEntry> topStealers;
+
+  factory StolenSummary.fromJson(Map<String, dynamic> json) => StolenSummary(
+    totalQuantity: (json['totalQuantity'] as num?)?.toInt() ?? 0,
+    cropsReturned: (json['cropsReturned'] as num?)?.toInt() ?? 0,
+    quotaPenalty: _asString(json['quotaPenalty']),
+    stealerCount: (json['stealerCount'] as num?)?.toInt() ?? 0,
+    topStealers: _listOf(json['topStealers'], StealerEntry.fromJson),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'totalQuantity': totalQuantity,
+    'cropsReturned': cropsReturned,
+    'quotaPenalty': quotaPenalty,
+    'stealerCount': stealerCount,
+    'topStealers': topStealers.map((e) => e.toJson()).toList(),
+  };
+}
+
+/// 单个偷菜者条目。
+class StealerEntry {
+  const StealerEntry({this.userId = '', this.username = '', this.quantity = 0});
+
+  final String userId;
+  final String username;
+  final int quantity;
+
+  factory StealerEntry.fromJson(Map<String, dynamic> json) => StealerEntry(
+    userId: _asString(json['userId']),
+    username: _asString(json['username']),
+    quantity: (json['quantity'] as num?)?.toInt() ?? 0,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'userId': userId,
+    'username': username,
+    'quantity': quantity,
+  };
+}
+
+/// 昨日被帮忙汇总。
+class HelpedSummary {
+  const HelpedSummary({
+    this.helperCount = 0,
+    this.processedTotal = 0,
+    this.topHelpers = const [],
+  });
+
+  final int helperCount;
+  final int processedTotal;
+
+  /// 帮忙者条目（样例为空数组，字段形状待后端确认）。
+  final List<HelperEntry> topHelpers;
+
+  factory HelpedSummary.fromJson(Map<String, dynamic> json) => HelpedSummary(
+    helperCount: (json['helperCount'] as num?)?.toInt() ?? 0,
+    processedTotal: (json['processedTotal'] as num?)?.toInt() ?? 0,
+    topHelpers: _listOf(json['topHelpers'], HelperEntry.fromJson),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'helperCount': helperCount,
+    'processedTotal': processedTotal,
+    'topHelpers': topHelpers.map((e) => e.toJson()).toList(),
+  };
+}
+
+/// 单个帮忙者条目（字段形状待后端确认，暂与 [StealerEntry] 同构）。
+class HelperEntry {
+  const HelperEntry({this.userId = '', this.username = '', this.quantity = 0});
+
+  final String userId;
+  final String username;
+  final int quantity;
+
+  factory HelperEntry.fromJson(Map<String, dynamic> json) => HelperEntry(
+    userId: _asString(json['userId']),
+    username: _asString(json['username']),
+    quantity: (json['quantity'] as num?)?.toInt() ?? 0,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'userId': userId,
+    'username': username,
+    'quantity': quantity,
+  };
+}
+
 DateTime? _parseDate(dynamic value) {
   if (value is String && value.isNotEmpty) {
     return DateTime.tryParse(value);
@@ -592,4 +774,22 @@ Map<String, int> _parseByKind(dynamic value) {
     if (v is num) map['$k'] = v.toInt();
   });
   return map;
+}
+
+/// 防御式字符串解析：null/缺失 → ''，其它类型统一 toString()，绝不因类型不符抛错。
+String _asString(dynamic value) => value == null ? '' : value.toString();
+
+/// 防御式布尔解析：仅真正的 bool 值生效，null/缺失/其它类型 → false。
+bool _asBool(dynamic value) => value is bool && value;
+
+/// 防御式对象列表解析：非 List → 空；List 内非 Map 元素跳过（不会让整个解析失败）。
+List<T> _listOf<T>(
+  dynamic value,
+  T Function(Map<String, dynamic>) fromJson,
+) {
+  if (value is! List) return const [];
+  return value
+      .whereType<Map<String, dynamic>>()
+      .map(fromJson)
+      .toList();
 }

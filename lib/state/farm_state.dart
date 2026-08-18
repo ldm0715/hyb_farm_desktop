@@ -7,6 +7,7 @@ import 'package:hyb_farm_desktop/api/models.dart';
 import 'package:hyb_farm_desktop/core/constants.dart';
 import 'package:hyb_farm_desktop/core/ranking.dart';
 import 'package:hyb_farm_desktop/core/resource_cache.dart';
+import 'package:hyb_farm_desktop/services/daily_summary_store.dart';
 import 'package:hyb_farm_desktop/services/price_trend_store.dart';
 
 /// 自动化运行状态。
@@ -17,9 +18,11 @@ class FarmState extends ChangeNotifier {
     this._api, {
     DateTime Function()? now,
     PriceTrendStore? priceTrendStore,
+    DailySummaryStore? dailySummaryStore,
   }) : _now = now ?? DateTime.now {
     final clock = _now;
     _priceTrendStore = priceTrendStore;
+    _dailySummaryStore = dailySummaryStore;
     _cropsCache = ResourceCache<CropsResponse>(
       // crops 无 TTL：成熟时间固定，收菜/兜底按精确定时驱动，唯一守卫是最小间隔。
       ttl: Duration.zero,
@@ -56,6 +59,7 @@ class FarmState extends ChangeNotifier {
   final FarmApi _api;
   final DateTime Function() _now;
   PriceTrendStore? _priceTrendStore;
+  DailySummaryStore? _dailySummaryStore;
 
   late final ResourceCache<CropsResponse> _cropsCache;
   late final ResourceCache<FarmPlots> _plotsCache;
@@ -68,6 +72,11 @@ class FarmState extends ChangeNotifier {
   PriceTrends? _priceTrends;
   bool _trendLoading = false;
   bool _restoredTrend = false;
+
+  /// 每日日报（内存态）。只由 [loadDailySummary] 在成功拉取后写入。
+  DailySummary? _dailySummary;
+  bool _summaryLoading = false;
+  bool _restoredSummary = false;
 
   AutomationStatus _automation = AutomationStatus.idle;
   AutomationStatus get automation => _automation;
@@ -102,6 +111,9 @@ class FarmState extends ChangeNotifier {
 
   /// 趋势数据本身的更新时间（响应内 max lastRefreshedAt），趋势「服务器今天」判定用。
   DateTime? get trendDataRefreshedAt => _priceTrends?.dataRefreshedAt;
+
+  /// 每日日报（昨日被偷/帮忙汇总）；null = 尚未加载或加载失败。
+  DailySummary? get dailySummary => _dailySummary;
 
   /// 实时回收价：seedId → 原始整数价格。
   Map<String, int> get recyclePriceBySeedId => {
@@ -245,6 +257,57 @@ class FarmState extends ChangeNotifier {
     final data = store.loadData();
     if (data != null) {
       _priceTrends = data;
+      notifyListeners();
+    }
+  }
+
+  /// 懒加载每日日报（服务器 UTC 自然日一天最多**成功**一次，失败按最小间隔重试）。
+  ///
+  /// 无 force 参数：由日报卡 initState 与周期轮询触发；`RootShell._refresh()` 与
+  /// `loadPrices(force:true)` **绝不**触发本方法（与价格趋势一致的刷新路径隔离）。
+  /// 失败保留已恢复的旧日报，满 `kDailySummaryRetryInterval` 后自动重试。
+  Future<void> loadDailySummary() async {
+    final store = _dailySummaryStore;
+    if (store == null || _summaryLoading) return;
+
+    // 在任何 await 之前置 loading，防止并发调用重复请求。
+    _summaryLoading = true;
+    try {
+      await _restoreDailySummaryOnce();
+
+      final now = _now();
+      if (!store.shouldAttempt(now)) return;
+
+      // 先持久化本次尝试（失败重试间隔据此判定），成功后才能发网络请求；
+      // 持久化失败抛异常 → 不发请求。
+      final attempt = store.createAttempt(now);
+      await store.recordAttempt(attempt);
+
+      final result = await _api.fetchDailySummary();
+      // 响应缺 periodDate/date 视为无效，不计为成功（保留旧日报，满间隔后可重试）。
+      if (result.periodDate.isEmpty && result.summary.date.isEmpty) {
+        throw Exception('Daily summary response missing periodDate/date');
+      }
+      await store.recordSuccess(result: result, localReceivedAt: _now());
+
+      _dailySummary = result;
+      notifyListeners();
+    } on Exception {
+      // 保留已恢复的旧日报；lastAttemptedLocalAt 已记，满间隔后重试。
+    } finally {
+      _summaryLoading = false;
+    }
+  }
+
+  /// 冷启动从持久化恢复日报（幂等，仅首次执行）。
+  Future<void> _restoreDailySummaryOnce() async {
+    if (_restoredSummary) return;
+    _restoredSummary = true;
+    final store = _dailySummaryStore;
+    if (store == null) return;
+    final data = store.loadData();
+    if (data != null) {
+      _dailySummary = data;
       notifyListeners();
     }
   }
