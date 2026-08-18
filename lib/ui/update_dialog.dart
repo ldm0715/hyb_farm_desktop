@@ -9,6 +9,7 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
 import 'package:hyb_farm_desktop/core/desktop_shell.dart';
 import 'package:hyb_farm_desktop/core/formatters.dart';
@@ -154,6 +155,70 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     if (mounted) Navigator.of(context).pop();
   }
 
+  /// 用语义色/排版令牌构造 Markdown 样式表；亮/暗自适应由 colors 保证。
+  /// 标题/加粗只用 w600（NotoSansSC 只注册 400/600，避免引擎合成粗体）。
+  MarkdownStyleSheet _markdownStyleSheet(FarmColorScheme colors) {
+    final body = FarmTextStyles.bodySecondary.copyWith(
+      color: colors.textPrimary,
+      height: 1.5,
+    );
+    final h = body.copyWith(fontWeight: FontWeight.w600);
+    return MarkdownStyleSheet(
+      a: body.copyWith(
+        color: colors.primary,
+        decoration: TextDecoration.underline,
+        decorationColor: colors.primary,
+      ),
+      p: body,
+      pPadding: EdgeInsets.zero,
+      em: const TextStyle(fontStyle: FontStyle.italic),
+      strong: const TextStyle(fontWeight: FontWeight.w600),
+      del: const TextStyle(decoration: TextDecoration.lineThrough),
+      h1: h.copyWith(fontSize: 16),
+      h2: h.copyWith(fontSize: 15),
+      h3: h.copyWith(fontSize: 14),
+      h4: h.copyWith(fontSize: 13),
+      h5: h.copyWith(fontSize: 12),
+      h6: h.copyWith(fontSize: 12, color: colors.textTertiary),
+      h1Padding: EdgeInsets.zero,
+      h2Padding: EdgeInsets.zero,
+      h3Padding: EdgeInsets.zero,
+      h4Padding: EdgeInsets.zero,
+      h5Padding: EdgeInsets.zero,
+      h6Padding: EdgeInsets.zero,
+      code: FarmTextStyles.monoText.copyWith(color: colors.textPrimary),
+      codeblockPadding: const EdgeInsets.all(FarmSpacing.xs),
+      codeblockDecoration: BoxDecoration(
+        color: colors.surfaceSubtle,
+        borderRadius: BorderRadius.circular(FarmRadii.small),
+      ),
+      blockquote: FarmTextStyles.bodySecondary.copyWith(
+        color: colors.textSecondary,
+        height: 1.5,
+      ),
+      blockquotePadding: const EdgeInsets.only(left: FarmSpacing.xs),
+      blockquoteDecoration: BoxDecoration(
+        border: Border(left: BorderSide(color: colors.borderStrong, width: 3)),
+      ),
+      blockSpacing: FarmSpacing.sm,
+      listBullet: FarmTextStyles.bodySecondary.copyWith(
+        color: colors.textSecondary,
+        height: 1.5,
+      ),
+      listBulletPadding: const EdgeInsets.only(right: FarmSpacing.xs),
+      listIndent: FarmSpacing.md,
+      horizontalRuleDecoration: BoxDecoration(
+        border: Border(top: BorderSide(color: colors.border, width: 1)),
+      ),
+      tableHead: body.copyWith(fontWeight: FontWeight.w600),
+      tableBody: FarmTextStyles.bodySecondary.copyWith(
+        color: colors.textSecondary,
+      ),
+      tableBorder: TableBorder.all(color: colors.border),
+      tableCellsPadding: const EdgeInsets.all(FarmSpacing.xs),
+    );
+  }
+
   Widget _releaseInfo(FarmColorScheme colors) {
     final body = widget.info.body.trim();
     return Column(
@@ -176,12 +241,15 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 300),
             child: SingleChildScrollView(
-              child: SelectableText(
-                body,
-                style: FarmTextStyles.bodySecondary.copyWith(
-                  color: colors.textPrimary,
-                  height: 1.5,
-                ),
+              child: MarkdownBody(
+                data: body,
+                selectable: true, // 保留可选中复制（内部 SelectableText.rich）。
+                styleSheet: _markdownStyleSheet(colors),
+                onTapLink: (text, href, title) {
+                  final url = href;
+                  if (url == null || url.isEmpty) return; // href 可空。
+                  openUrl(url);
+                },
               ),
             ),
           ),
