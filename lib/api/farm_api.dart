@@ -69,6 +69,10 @@ class FarmApi {
   /// 实时价格（一次请求派生两份）：`data[]`（recyclePrice）与 `market.items[]`
   /// （unitPrice）。原 fetchRecyclePrices 与 fetchUnitPrices 打同一 URL 同一参数，
   /// 合并为单次请求，避免仓库页与收益排行重复拉取。
+  ///
+  /// Branch B：保留 includeTrend 参数以保证响应含 `market.items[]`；响应里的
+  /// `trend` 字段在此被**刻意忽略**——趋势数据只由 `fetchPriceTrends` 读取并走
+  /// `PriceTrendStore` 自然日门控（刷新按钮永不触发），绝不在此更新趋势。
   Future<FarmPrices> fetchPrices() async {
     final json = await _client.get(
       '/api/farm/recycle/prices',
@@ -109,6 +113,49 @@ class FarmApi {
     return FarmPrices(
       recyclePrices: recyclePrices,
       unitPrices: unitPrices,
+    );
+  }
+
+  /// 价格趋势快照：`market.items[].trend`（近 7 天每日均价桶）。
+  /// 独立于实时价格：请求频率由 `PriceTrendStore` 按服务器 UTC 自然日门控
+  /// （一天最多尝试一次，刷新按钮不触发），调用方见 FarmState.loadPriceTrend。
+  Future<PriceTrends> fetchPriceTrends() async {
+    final json = await _client.get(
+      '/api/farm/recycle/prices',
+      query: const {
+        'includeTrend': '1',
+        'granularity': 'day',
+        'trendRange': '7',
+      },
+    );
+    final map = _asMap(json);
+
+    final market = map['market'] is Map<String, dynamic>
+        ? (map['market'] as Map<String, dynamic>)['items']
+        : null;
+    final items = market is List ? market : const <dynamic>[];
+
+    final bySeedId = <String, List<TrendPoint>>{};
+    DateTime? maxRefreshedAt;
+    for (final item in items.whereType<Map<String, dynamic>>()) {
+      final m = MarketItem.fromJson(item);
+      if (m.seedId.isNotEmpty && m.trend.isNotEmpty) {
+        bySeedId[m.seedId] = m.trend;
+      }
+      if (m.lastRefreshedAt != null &&
+          (maxRefreshedAt == null ||
+              m.lastRefreshedAt!.isAfter(maxRefreshedAt))) {
+        maxRefreshedAt = m.lastRefreshedAt;
+      }
+    }
+
+    return PriceTrends(
+      bySeedId: bySeedId,
+      // 数据更新时间（趋势「服务器今天」判定用）。
+      dataRefreshedAt: maxRefreshedAt,
+      // 服务器时间锚点：Date header 可用时优先，否则回退数据刷新时刻。
+      // 当前 ApiClient.get 只返回解码 body（不暴露 Date header），故等于 dataRefreshedAt。
+      serverObservedAt: maxRefreshedAt,
     );
   }
 
@@ -239,4 +286,64 @@ class FarmPrices {
 
   final List<RecyclePrice> recyclePrices;
   final Map<String, int> unitPrices;
+}
+
+/// 价格趋势快照（`fetchPriceTrends` 结果，同时作为 PriceTrendStore 持久化的数据载荷）。
+///
+/// - `bySeedId`：seedId → 近 7 天每日均价桶。
+/// - `dataRefreshedAt`：响应内各条目 `lastRefreshedAt` 的最大值，即数据本身的更新时间；
+///   趋势计算用它判定「服务器今天」（剔除今天的桶）。
+/// - `serverObservedAt`：服务器时间锚点（估算服务器当前时间用）。Date header 可用时优先，
+///   否则回退 `dataRefreshedAt`；当前 ApiClient.get 只返回解码 body，实际等于 dataRefreshedAt。
+class PriceTrends {
+  const PriceTrends({
+    this.bySeedId = const {},
+    this.serverObservedAt,
+    this.dataRefreshedAt,
+  });
+
+  final Map<String, List<TrendPoint>> bySeedId;
+  final DateTime? serverObservedAt;
+  final DateTime? dataRefreshedAt;
+
+  factory PriceTrends.fromJson(Map<String, dynamic> json) {
+    final raw = json['bySeedId'];
+    final bySeedId = <String, List<TrendPoint>>{};
+    if (raw is Map) {
+      raw.forEach((key, value) {
+        final list = value is List
+            ? value
+                .whereType<Map<String, dynamic>>()
+                .map(TrendPoint.fromJson)
+                .toList()
+            : const <TrendPoint>[];
+        if (key is String && key.isNotEmpty && list.isNotEmpty) {
+          bySeedId[key] = list;
+        }
+      });
+    }
+    return PriceTrends(
+      bySeedId: bySeedId,
+      serverObservedAt: _parseDate(json['serverObservedAt']),
+      dataRefreshedAt: _parseDate(json['dataRefreshedAt']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'bySeedId': bySeedId.map(
+      (seedId, points) => MapEntry(
+        seedId,
+        points.map((p) => p.toJson()).toList(),
+      ),
+    ),
+    'serverObservedAt': serverObservedAt?.toUtc().toIso8601String(),
+    'dataRefreshedAt': dataRefreshedAt?.toUtc().toIso8601String(),
+  };
+
+  static DateTime? _parseDate(dynamic value) {
+    if (value is String && value.isNotEmpty) {
+      return DateTime.tryParse(value);
+    }
+    return null;
+  }
 }

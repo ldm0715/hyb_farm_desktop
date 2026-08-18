@@ -47,6 +47,10 @@ class _FakeApi extends FarmApi {
   @override
   Future<FarmPrices> fetchPrices() async =>
       const FarmPrices(recyclePrices: [], unitPrices: {});
+
+  // 防御：收益排行视图可能懒加载趋势；返回空快照避免 widget 测试真发 HTTP。
+  @override
+  Future<PriceTrends> fetchPriceTrends() async => const PriceTrends();
 }
 
 // Golden baselines vary across Windows rendering environments. These diagnostic

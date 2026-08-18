@@ -239,6 +239,52 @@ void main() {
     });
   });
 
+  group('MarketItem / TrendPoint', () {
+    test('从 fixture 解析 trend 桶与 lastRefreshedAt', () {
+      final market = _loadFixture('price_trends.json')['market']
+          as Map<String, dynamic>;
+      final items = market['items'] as List<dynamic>;
+      final corn = MarketItem.fromJson(items[0] as Map<String, dynamic>);
+
+      expect(corn.seedId, 'corn');
+      expect(corn.unitPriceInt, 21570);
+      expect(corn.lastRefreshedAt, DateTime.parse('2026-08-18T04:17:06.664Z'));
+      expect(corn.trend.length, 3);
+
+      final first = corn.trend[0];
+      expect(first.bucketStartedAt, DateTime.utc(2026, 8, 16));
+      expect(first.avgUnitPriceInt, 21639);
+      expect(first.avgTotalSupply, 95649);
+      expect(first.sampleCount, 6);
+    });
+
+    test('trend 缺失 / 空数组 → 空列表', () {
+      final market = _loadFixture('price_trends.json')['market']
+          as Map<String, dynamic>;
+      final items = market['items'] as List<dynamic>;
+      final wheat = MarketItem.fromJson(items[1] as Map<String, dynamic>);
+      final barley = MarketItem.fromJson(items[2] as Map<String, dynamic>);
+
+      expect(wheat.trend, isEmpty);
+      expect(barley.trend, isEmpty);
+      expect(barley.lastRefreshedAt, isNull);
+    });
+
+    test('TrendPoint toJson/fromJson 往返', () {
+      const point = TrendPoint(
+        bucketStartedAt: null,
+        avgUnitPrice: '21659',
+        avgTotalSupply: 93290,
+        sampleCount: 10,
+      );
+      final restored = TrendPoint.fromJson(point.toJson());
+      expect(restored.avgUnitPriceInt, 21659);
+      expect(restored.avgTotalSupply, 93290);
+      expect(restored.sampleCount, 10);
+      expect(restored.bucketStartedAt, isNull);
+    });
+  });
+
   group('RecycleQuote', () {
     test('从 fixture 的 data 对象解析', () {
       final data =

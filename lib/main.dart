@@ -22,6 +22,7 @@ import 'services/harvest_log.dart';
 import 'services/harvest_scheduler.dart';
 import 'services/notification_service.dart';
 import 'services/power_service.dart';
+import 'services/price_trend_store.dart';
 import 'services/recycle_service.dart';
 import 'services/replant_service.dart';
 import 'services/steal_history.dart';
@@ -83,7 +84,9 @@ Future<void> main() async {
   if (savedPos != null) {
     await windowManager.setPosition(savedPos);
   }
-  final farmState = FarmState(farmApi);
+  // 价格趋势存储：服务器 UTC 自然日一天一次（重启不重置）；单账号模型不传 accountId。
+  final priceTrendStore = await PriceTrendStore.create();
+  final farmState = FarmState(farmApi, priceTrendStore: priceTrendStore);
   final coordinator = OperationCoordinator();
   final replant = ReplantService(api: farmApi);
   final recycleService = RecycleService(api: farmApi, coordinator: coordinator);

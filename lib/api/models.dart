@@ -342,18 +342,65 @@ class RecycleResult {
   );
 }
 
+/// 价格趋势单日桶（`market.items[].trend[]`，UTC 零点对齐的自然日桶）。
+class TrendPoint {
+  const TrendPoint({
+    this.bucketStartedAt,
+    this.avgUnitPrice = '0',
+    this.avgTotalSupply = 0,
+    this.sampleCount = 0,
+  });
+
+  final DateTime? bucketStartedAt;
+  final String avgUnitPrice;
+  final int avgTotalSupply;
+  final int sampleCount;
+
+  int get avgUnitPriceInt => int.tryParse(avgUnitPrice) ?? 0;
+
+  factory TrendPoint.fromJson(Map<String, dynamic> json) => TrendPoint(
+    bucketStartedAt: _parseDate(json['bucketStartedAt']),
+    avgUnitPrice: json['avgUnitPrice'] as String? ?? '0',
+    avgTotalSupply: (json['avgTotalSupply'] as num?)?.toInt() ?? 0,
+    sampleCount: (json['sampleCount'] as num?)?.toInt() ?? 0,
+  );
+
+  /// 持久化编码（PriceTrendStore 缓存恢复用）。
+  Map<String, dynamic> toJson() => {
+    'bucketStartedAt': bucketStartedAt?.toUtc().toIso8601String(),
+    'avgUnitPrice': avgUnitPrice,
+    'avgTotalSupply': avgTotalSupply,
+    'sampleCount': sampleCount,
+  };
+}
+
 /// 市场行情条目（`recycle/prices` 的 `market.items[]`，收益排行价格合并用）。
+/// `trend`/`lastRefreshedAt` 仅由趋势专用请求 `fetchPriceTrends` 读取，
+/// 实时价格路径（`fetchPrices`）刻意忽略它们（见 farm_api.dart 注释）。
 class MarketItem {
-  const MarketItem({required this.seedId, this.unitPrice = '0'});
+  const MarketItem({
+    required this.seedId,
+    this.unitPrice = '0',
+    this.trend = const [],
+    this.lastRefreshedAt,
+  });
 
   final String seedId;
   final String unitPrice;
+  final List<TrendPoint> trend;
+  final DateTime? lastRefreshedAt;
 
   int get unitPriceInt => int.tryParse(unitPrice) ?? 0;
 
   factory MarketItem.fromJson(Map<String, dynamic> json) => MarketItem(
     seedId: json['seedId'] as String? ?? json['id'] as String? ?? '',
     unitPrice: json['unitPrice'] as String? ?? '0',
+    trend: (json['trend'] as List?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(TrendPoint.fromJson)
+            .toList() ??
+        const [],
+    lastRefreshedAt: _parseDate(json['lastRefreshedAt']),
   );
 }
 

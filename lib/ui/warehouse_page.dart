@@ -603,8 +603,23 @@ class _SellBar extends StatelessWidget {
 }
 
 /// 收益排行视图：最优作物 hero + 按每小时收益降序的作物列表。
-class _RankingView extends StatelessWidget {
+///
+/// 首次展示时懒加载价格趋势（`FarmState.loadPriceTrend`，服务器 UTC 自然日一天
+/// 最多尝试一次、刷新按钮不触发）；恢复/加载完成后经 notifyListeners 自动重建。
+class _RankingView extends StatefulWidget {
   const _RankingView();
+
+  @override
+  State<_RankingView> createState() => _RankingViewState();
+}
+
+class _RankingViewState extends State<_RankingView> {
+  @override
+  void initState() {
+    super.initState();
+    // fire-and-forget：loadPriceTrend 内部静默失败，且当日已尝试时直接返回（零网络）。
+    context.read<FarmState>().loadPriceTrend();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -717,6 +732,21 @@ class _RankingHero extends StatelessWidget {
                     color: colors.textSecondary,
                   ),
                 ),
+                if (top.trendPercent != null) ...[
+                  const SizedBox(height: FarmSpacing.xxs),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '昨日涨跌 ',
+                        style: FarmTextStyles.bodySecondary.copyWith(
+                          color: colors.textSecondary,
+                        ),
+                      ),
+                      _TrendChip(percent: top.trendPercent),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -841,6 +871,8 @@ class _RankingRow extends StatelessWidget {
                   color: colors.textSecondary,
                 ),
               ),
+              const SizedBox(width: FarmSpacing.xxs),
+              _TrendChip(percent: row.trendPercent),
             ],
           ),
           const SizedBox(height: FarmSpacing.xs - 2),
@@ -854,6 +886,73 @@ class _RankingRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 「昨日涨跌」徽标：最近两个完整日（昨日 vs 前日）日均价变化百分比。
+///
+/// 方向/颜色按**归一化到 2 位小数**后的值判定（红涨绿跌）：涨=红（error）、
+/// 跌=绿（success）、持平=中性「持平」（绝不显示 ↑0.00%/↓0.00%）。
+/// `percent == null`（无趋势/数据不足）时渲染空，不影响布局。
+class _TrendChip extends StatelessWidget {
+  const _TrendChip({required this.percent});
+
+  final double? percent;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = FarmColorScheme.of(context);
+    final p = percent;
+    if (p == null) return const SizedBox.shrink();
+
+    final value = normalizeTrendPercent(p);
+    final flat = value == 0;
+    final up = value > 0;
+    final color = flat
+        ? colors.textSecondary
+        : up
+        ? colors.error
+        : colors.success;
+
+    return Tooltip(
+      message: '昨日较前日日均价变化',
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: FarmSpacing.xxs,
+          vertical: 2,
+        ),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(FarmRadii.small),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              flat ? Icons.remove : up ? Icons.trending_up : Icons.trending_down,
+              size: 12,
+              color: color,
+            ),
+            const SizedBox(width: 2),
+            // 持平是中文文案走 statusText；数值百分比走 numericValue（Inter + 等宽数字）。
+            Text(
+              flat ? '持平' : formatTrendPercent(value),
+              style: flat
+                  ? FarmTextStyles.statusText.copyWith(
+                      color: color,
+                      fontWeight: FontWeight.w600,
+                    )
+                  : FarmTextStyles.numericValue(
+                      FarmTextStyles.statusText.copyWith(
+                        color: color,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

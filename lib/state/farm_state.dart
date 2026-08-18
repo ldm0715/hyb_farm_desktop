@@ -7,13 +7,19 @@ import 'package:hyb_farm_desktop/api/models.dart';
 import 'package:hyb_farm_desktop/core/constants.dart';
 import 'package:hyb_farm_desktop/core/ranking.dart';
 import 'package:hyb_farm_desktop/core/resource_cache.dart';
+import 'package:hyb_farm_desktop/services/price_trend_store.dart';
 
 /// 自动化运行状态。
 enum AutomationStatus { idle, running, paused }
 
 class FarmState extends ChangeNotifier {
-  FarmState(this._api, {DateTime Function()? now}) {
-    final clock = now ?? DateTime.now;
+  FarmState(
+    this._api, {
+    DateTime Function()? now,
+    PriceTrendStore? priceTrendStore,
+  }) : _now = now ?? DateTime.now {
+    final clock = _now;
+    _priceTrendStore = priceTrendStore;
     _cropsCache = ResourceCache<CropsResponse>(
       // crops 无 TTL：成熟时间固定，收菜/兜底按精确定时驱动，唯一守卫是最小间隔。
       ttl: Duration.zero,
@@ -48,12 +54,20 @@ class FarmState extends ChangeNotifier {
   }
 
   final FarmApi _api;
+  final DateTime Function() _now;
+  PriceTrendStore? _priceTrendStore;
 
   late final ResourceCache<CropsResponse> _cropsCache;
   late final ResourceCache<FarmPlots> _plotsCache;
   late final ResourceCache<List<InventoryItem>> _inventoryCache;
   late final ResourceCache<List<Seed>> _seedsCache;
   late final ResourceCache<FarmPrices> _pricesCache;
+
+  /// 价格趋势（内存态）。只由 [loadPriceTrend] 在成功拉取后写入；
+  /// 实时价格响应即使含 trend 也**不**更新此值。
+  PriceTrends? _priceTrends;
+  bool _trendLoading = false;
+  bool _restoredTrend = false;
 
   AutomationStatus _automation = AutomationStatus.idle;
   AutomationStatus get automation => _automation;
@@ -74,8 +88,20 @@ class FarmState extends ChangeNotifier {
   /// 实时单价（seedId → 原始整数），收益排行数据源。
   Map<String, int> get unitPrices => _pricesCache.value?.unitPrices ?? const {};
 
-  /// 收益排行（按每小时收益降序）。
-  List<RankingRow> get ranking => buildRanking(seeds, unitPrices);
+  /// 收益排行（按每小时收益降序，附带「昨日涨跌」趋势）。
+  List<RankingRow> get ranking => buildRanking(
+    seeds,
+    unitPrices,
+    trends: priceTrends,
+    serverRefreshedAt: trendDataRefreshedAt,
+  );
+
+  /// 价格趋势：seedId → 每日均价桶（日级，服务器 UTC 自然日一天一次）。
+  Map<String, List<TrendPoint>> get priceTrends =>
+      _priceTrends?.bySeedId ?? const {};
+
+  /// 趋势数据本身的更新时间（响应内 max lastRefreshedAt），趋势「服务器今天」判定用。
+  DateTime? get trendDataRefreshedAt => _priceTrends?.dataRefreshedAt;
 
   /// 实时回收价：seedId → 原始整数价格。
   Map<String, int> get recyclePriceBySeedId => {
@@ -175,6 +201,51 @@ class FarmState extends ChangeNotifier {
       notifyListeners();
     } on Exception {
       // 忽略：价格缺失时仓库页回落展示 inventory.recyclePrice，排行显示为空。
+    }
+  }
+
+  /// 懒加载价格趋势（服务器 UTC 自然日一天最多**尝试**一次，成功失败同计）。
+  ///
+  /// **无 force 参数**：仅由收益排行视图首次展示时调用；`RootShell._refresh()` 与
+  /// `loadPrices(force:true)` **绝不**触发本方法（趋势与实时价格彻底隔离）。
+  /// 失败保留已恢复的旧趋势，当天不自动重试。
+  Future<void> loadPriceTrend() async {
+    final store = _priceTrendStore;
+    if (store == null) return;
+    if (_trendLoading) return;
+
+    await _restorePriceTrendOnce();
+    if (!store.shouldAttempt(_now())) return;
+
+    _trendLoading = true;
+    try {
+      // 先持久化本次尝试（成功/失败同计），成功后才能发网络请求；
+      // 持久化失败抛异常 → 不发请求，避免突破当天请求上限。
+      final attempt = store.createAttempt(_now());
+      await store.recordAttempt(attempt);
+
+      final result = await _api.fetchPriceTrends();
+      await store.recordSuccess(result: result, localReceivedAt: _now());
+
+      _priceTrends = result;
+      notifyListeners();
+    } on Exception {
+      // 保留已恢复的旧趋势；当天不自动重试。
+    } finally {
+      _trendLoading = false;
+    }
+  }
+
+  /// 冷启动从持久化恢复趋势数据（幂等，仅首次执行）。
+  Future<void> _restorePriceTrendOnce() async {
+    if (_restoredTrend) return;
+    _restoredTrend = true;
+    final store = _priceTrendStore;
+    if (store == null) return;
+    final data = store.loadData();
+    if (data != null) {
+      _priceTrends = data;
+      notifyListeners();
     }
   }
 

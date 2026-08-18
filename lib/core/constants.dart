@@ -29,6 +29,9 @@ const Duration kSeedsCacheTtl = Duration(hours: 24);
 const Duration kPricesCacheTtl = Duration(minutes: 30);
 const Duration kFriendsListCacheTtl = Duration(minutes: 5);
 
+/// 价格趋势缓存陈旧阈值；请求频率仍由服务器 UTC 自然日门控（不是「24h 时间下限」）。
+const Duration kPriceTrendStaleAfter = Duration(hours: 24);
+
 /// 资源请求最小间隔（决定两次实际请求之间的最短间隔，失败也更新）。
 const Duration kMinRequestInterval = Duration(seconds: 15);
 

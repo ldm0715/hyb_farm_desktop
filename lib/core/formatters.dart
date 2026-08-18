@@ -88,6 +88,14 @@ String formatPerHour(double value) {
   return '\$$trimmed';
 }
 
+/// 涨跌百分比归一化到 2 位小数（方向/文案判定的基准，杜绝 ↓0.00%/↑0.00%）。
+double normalizeTrendPercent(double percent) => (percent * 100).round() / 100;
+
+/// 涨跌百分比 → 绝对值百分比文本（如 "0.09%"），方向由 UI 箭头/文案表达。
+/// 入参应为已归一化（[normalizeTrendPercent]）的值。
+String formatTrendPercent(double percent) =>
+    '${percent.abs().toStringAsFixed(2)}%';
+
 /// 字节数 → B/KB/MB/GB 人性化文本（下载进度 / 安装包大小展示用）。
 String formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';

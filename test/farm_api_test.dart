@@ -123,6 +123,35 @@ void main() {
     expect(prices.unitPrices['b'], 300000);
   });
 
+  test('fetchPriceTrends 解析 bySeedId + dataRefreshedAt（max lastRefreshedAt）', () async {
+    final api = _api({
+      '/api/farm/recycle/prices':
+          '{"success":true,"data":[],"market":{"items":['
+              '{"seedId":"corn","unitPrice":"21570","lastRefreshedAt":"2026-08-18T04:17:06.664Z","trend":['
+              '{"bucketStartedAt":"2026-08-16T00:00:00.000Z","avgUnitPrice":"21639","avgTotalSupply":95649,"sampleCount":6},'
+              '{"bucketStartedAt":"2026-08-17T00:00:00.000Z","avgUnitPrice":"21659","avgTotalSupply":93290,"sampleCount":10},'
+              '{"bucketStartedAt":"2026-08-18T00:00:00.000Z","avgUnitPrice":"21571","avgTotalSupply":91836,"sampleCount":2}]},'
+              '{"seedId":"wheat","unitPrice":"10000","lastRefreshedAt":"2026-08-18T03:00:00.000Z","trend":['
+              '{"bucketStartedAt":"2026-08-17T00:00:00.000Z","avgUnitPrice":"9999","avgTotalSupply":100,"sampleCount":3}]}'
+              ']}}',
+    });
+    final trends = await api.fetchPriceTrends();
+    expect(trends.bySeedId.keys, containsAll(['corn', 'wheat']));
+
+    final corn = trends.bySeedId['corn']!;
+    expect(corn.length, 3);
+    expect(corn[0].bucketStartedAt, DateTime.utc(2026, 8, 16));
+    expect(corn[0].avgUnitPriceInt, 21639);
+    expect(corn[0].avgTotalSupply, 95649);
+    expect(corn[0].sampleCount, 6);
+    expect(corn[2].avgUnitPriceInt, 21571);
+
+    // dataRefreshedAt = max lastRefreshedAt（corn 04:17 晚于 wheat 03:00）。
+    expect(trends.dataRefreshedAt, DateTime.utc(2026, 8, 18, 4, 17, 6, 664));
+    // 当前 ApiClient 不暴露 Date header → 服务器锚点回退为 dataRefreshedAt。
+    expect(trends.serverObservedAt, trends.dataRefreshedAt);
+  });
+
   test('recycleQuote 取 data 对象', () async {
     final api = _api({
       '/api/farm/recycle/quote':

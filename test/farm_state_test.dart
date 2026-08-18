@@ -1,10 +1,13 @@
-/// FarmState 派生指标测试：成熟计数、倒计时、空闲地块、仓库价值、debuff。
+/// FarmState 派生指标测试：成熟计数、倒计时、空闲地块、仓库价值、debuff、
+/// 价格趋势加载（自然日一次 / 失败同日不重试 / 刷新路径结构性隔离）。
 library;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hyb_farm_desktop/api/api_client.dart';
 import 'package:hyb_farm_desktop/api/farm_api.dart';
 import 'package:hyb_farm_desktop/api/models.dart';
+import 'package:hyb_farm_desktop/services/price_trend_store.dart';
 import 'package:hyb_farm_desktop/state/farm_state.dart';
 
 /// 可配置的 FarmApi 假实现：覆盖只读接口，避免真实 HTTP。
@@ -14,12 +17,17 @@ class _FakeFarmApi extends FarmApi {
     this.plots = const FarmPlots(totalSlots: 0, freeSlots: 0),
     this.inventory = const [],
     this.recyclePrices = const [],
+    this.priceTrendsResult,
   }) : super(ApiClient());
 
   CropsResponse crops;
   FarmPlots plots;
   List<InventoryItem> inventory;
   List<RecyclePrice> recyclePrices;
+
+  PriceTrends? priceTrendsResult;
+  bool failTrendFetch = false;
+  int trendFetchCalls = 0;
 
   @override
   Future<CropsResponse> fetchCrops() async => crops;
@@ -33,6 +41,23 @@ class _FakeFarmApi extends FarmApi {
   @override
   Future<FarmPrices> fetchPrices() async =>
       FarmPrices(recyclePrices: recyclePrices, unitPrices: const {});
+
+  @override
+  Future<PriceTrends> fetchPriceTrends() async {
+    trendFetchCalls++;
+    if (failTrendFetch) throw Exception('network');
+    return priceTrendsResult ?? const PriceTrends();
+  }
+}
+
+/// recordAttempt 持久化失败的 Store：模拟 setString 失败场景（不真发网络请求）。
+class _ThrowingTrendStore extends PriceTrendStore {
+  _ThrowingTrendStore(super.prefs, super.key);
+
+  @override
+  Future<void> recordAttempt(CachedPriceTrendState s) async {
+    throw Exception('persist failed');
+  }
 }
 
 Crop _crop({
@@ -183,5 +208,165 @@ void main() {
     expect(state.recyclePrices.length, 2);
     expect(state.recyclePriceBySeedId['pumpkin'], 612581);
     expect(state.recyclePriceBySeedId['corn'], 300000);
+  });
+
+  group('价格趋势：服务器 UTC 自然日一天一次', () {
+    late SharedPreferences prefs;
+    late _FakeFarmApi api;
+    late DateTime clock;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      prefs = await SharedPreferences.getInstance();
+      // 服务器 8/18 04:00Z 刷新；本地时钟 8/18 12:00（测试以 UTC 表示本地）。
+      api = _FakeFarmApi(
+        priceTrendsResult: PriceTrends(
+          bySeedId: {
+            'corn': [
+              TrendPoint(
+                bucketStartedAt: DateTime.utc(2026, 8, 17),
+                avgUnitPrice: '21659',
+                sampleCount: 10,
+              ),
+              TrendPoint(
+                bucketStartedAt: DateTime.utc(2026, 8, 16),
+                avgUnitPrice: '21639',
+                sampleCount: 8,
+              ),
+            ],
+          },
+          serverObservedAt: DateTime.utc(2026, 8, 18, 4),
+          dataRefreshedAt: DateTime.utc(2026, 8, 18, 4),
+        ),
+      );
+      clock = DateTime.utc(2026, 8, 18, 12);
+    });
+
+    PriceTrendStore makeStore() =>
+        PriceTrendStore(prefs, PriceTrendStore.keyFor(null));
+
+    FarmState makeState([PriceTrendStore? store]) => FarmState(
+      api,
+      now: () => clock,
+      priceTrendStore: store ?? makeStore(),
+    );
+
+    test('懒加载一次；同日内再次 loadPriceTrend 不重拉', () async {
+      final state = makeState();
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1);
+      expect(state.priceTrends.keys, contains('corn'));
+
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1); // 当日上限 + 已缓存
+    });
+
+    test('请求失败后同日不重试（尝试也计入当天次数）', () async {
+      api.failTrendFetch = true;
+      final state = makeState();
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1);
+
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1); // 失败后当天不得再次请求
+    });
+
+    test('请求失败后重启（重建 State+Store 同 prefs）同日仍不重试', () async {
+      api.failTrendFetch = true;
+      final state = makeState();
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1);
+
+      // 「重启」：同一 prefs 新建 Store 与 FarmState。
+      api.failTrendFetch = false;
+      final restarted = makeState(); // 新 store（同 prefs）+ 新 state
+      await restarted.loadPriceTrend();
+      expect(api.trendFetchCalls, 1); // 持久化 attempt 阻止同日重试
+    });
+
+    test('重启同日不重拉但恢复已持久化趋势（仍显示徽标）', () async {
+      final state = makeState();
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1);
+      expect(state.priceTrends.keys, contains('corn'));
+
+      final restarted = makeState(); // 「重启」：同 prefs 新建 store + state
+      await restarted.loadPriceTrend();
+      expect(api.trendFetchCalls, 1); // 同日不重拉
+      expect(restarted.priceTrends.keys, contains('corn')); // 持久化恢复
+    });
+
+    test('次日允许重新尝试', () async {
+      api.failTrendFetch = true;
+      final state = makeState();
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1);
+
+      api.failTrendFetch = false;
+      clock = DateTime.utc(2026, 8, 19, 12); // 次日（服务器 8/19）
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 2);
+      expect(state.priceTrends.keys, contains('corn'));
+    });
+
+    test('陈旧不能突破当日上限：同日内多次调用不重拉', () async {
+      final state = makeState();
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1);
+
+      clock = DateTime.utc(2026, 8, 18, 23, 59); // 同日更晚
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1);
+    });
+
+    test('客户端时间领先（快 2 天）：不产生重复请求循环', () async {
+      clock = DateTime.utc(2026, 8, 20, 12); // 客户端 8/20，服务器 8/18
+      final state = makeState();
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1);
+
+      clock = DateTime.utc(2026, 8, 20, 15);
+      await state.loadPriceTrend();
+      clock = DateTime.utc(2026, 8, 20, 20);
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1); // 固定偏移被抵消，不循环
+    });
+
+    test('客户端时间回拨：不抛异常、不绕过当日门控', () async {
+      final state = makeState();
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 1);
+
+      clock = DateTime.utc(2026, 8, 18, 6); // 早于 localObservedAt
+      await state.loadPriceTrend(); // 不抛异常
+      expect(api.trendFetchCalls, 1);
+    });
+
+    test('刷新路径结构性隔离：loadPrices(force) + refresh(force) 不触发趋势加载', () async {
+      final store = makeStore(); // 无任何记录 → 门控处于「理论上允许请求」态
+      final state = FarmState(api, now: () => clock, priceTrendStore: store);
+      expect(store.shouldAttempt(clock), isTrue); // 门控允许，而非被挡住
+
+      await state.loadPrices(force: true);
+      expect(api.trendFetchCalls, 0);
+
+      await state.refresh(force: true);
+      expect(api.trendFetchCalls, 0); // 证明刷新路径根本没调用趋势加载
+    });
+
+    test('实时价格响应不写 _priceTrends（趋势只由 loadPriceTrend 写入）', () async {
+      final state = makeState();
+      await state.loadPrices(force: true);
+      expect(state.priceTrends, isEmpty);
+
+      await state.loadPriceTrend();
+      expect(state.priceTrends.keys, contains('corn'));
+    });
+
+    test('recordAttempt 持久化失败 → 不发网络请求', () async {
+      final state = makeState(_ThrowingTrendStore(prefs, PriceTrendStore.keyFor(null)));
+      await state.loadPriceTrend();
+      expect(api.trendFetchCalls, 0);
+    });
   });
 }

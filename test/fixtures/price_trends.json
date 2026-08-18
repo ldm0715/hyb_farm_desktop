@@ -1,0 +1,43 @@
+{
+  "success": true,
+  "data": [],
+  "market": {
+    "items": [
+      {
+        "seedId": "corn",
+        "unitPrice": "21570",
+        "lastRefreshedAt": "2026-08-18T04:17:06.664Z",
+        "trend": [
+          {
+            "bucketStartedAt": "2026-08-16T00:00:00.000Z",
+            "avgUnitPrice": "21639",
+            "avgTotalSupply": 95649,
+            "sampleCount": 6
+          },
+          {
+            "bucketStartedAt": "2026-08-17T00:00:00.000Z",
+            "avgUnitPrice": "21659",
+            "avgTotalSupply": 93290,
+            "sampleCount": 10
+          },
+          {
+            "bucketStartedAt": "2026-08-18T00:00:00.000Z",
+            "avgUnitPrice": "21571",
+            "avgTotalSupply": 91836,
+            "sampleCount": 2
+          }
+        ]
+      },
+      {
+        "seedId": "wheat",
+        "unitPrice": "10000",
+        "lastRefreshedAt": "2026-08-18T03:00:00.000Z",
+        "trend": []
+      },
+      {
+        "seedId": "barley",
+        "unitPrice": "8000"
+      }
+    ]
+  }
+}
