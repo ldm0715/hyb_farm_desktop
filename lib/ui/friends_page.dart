@@ -296,6 +296,8 @@ class _FriendBar extends StatelessWidget {
     final cooling = friendState.isStealCoolingDown;
     final isStealing = friendState.stealingFriendId == friend.id;
     final canSteal = friend.isStealable && !isStealing && !cooling;
+    // 本机记录的最近一次成功偷菜时间（24h 内有效），不依赖服务端可偷状态。
+    final lastStealAt = friendState.lastStealAt(friend.id);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -317,38 +319,16 @@ class _FriendBar extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           Expanded(
+            flex: 2,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        friend.username,
-                        style: FarmTextStyles.listTitle.copyWith(
-                          color: colors.textPrimary,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (friend.isStealable)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: colors.surfaceSelected,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          '可偷',
-                          style: FarmTextStyles.statusText.copyWith(
-                            color: colors.primary,
-                          ),
-                        ),
-                      ),
-                  ],
+                Text(
+                  friend.username,
+                  style: FarmTextStyles.listTitle.copyWith(
+                    color: colors.textPrimary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
                 if (first != null) ...[
                   const SizedBox(height: 2),
@@ -381,21 +361,75 @@ class _FriendBar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          FilledButton(
-            onPressed: canSteal ? onSteal : null,
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              minimumSize: const Size(0, 36),
-            ),
-            child: Text(
-              isStealing
-                  ? '偷菜中…'
-                  : cooling
-                  ? '冷却${friendState.stealCooldownRemainingSeconds}s'
-                  : '偷菜',
+          // 尾部标签 + 按钮：顺序固定 [可偷] [已偷·x前] [偷菜]。
+          // 防溢出：尾部放 Flexible(flex:3) 获得有界宽度；「可偷」与按钮是非 flex 固定项
+          // （按钮优先级最高、永不挤压），「已偷」是 Flexible（可收缩到 0）+ maxWidth + ellipsis，
+          // 空间不足时先截断再隐藏，结构上不溢出；内容列 flex:2 由用户名/作物名 ellipsis 吸收。
+          Flexible(
+            flex: 3,
+            child: Row(
+              mainAxisSize: MainAxisSize.max,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (friend.isStealable)
+                  _StealTag(text: '可偷'),
+                if (lastStealAt != null)
+                  Flexible(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 120),
+                      child: _StealTag(
+                        text: '已偷·${formatRelativeTime(lastStealAt)}',
+                        subtle: true,
+                      ),
+                    ),
+                  ),
+                const SizedBox(width: 6),
+                FilledButton(
+                  onPressed: canSteal ? onSteal : null,
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    minimumSize: const Size(0, 36),
+                  ),
+                  child: Text(
+                    isStealing
+                        ? '偷菜中…'
+                        : cooling
+                        ? '冷却${friendState.stealCooldownRemainingSeconds}s'
+                        : '偷菜',
+                  ),
+                ),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 好友行尾部的状态标签：「可偷」（突出）与「已偷·x前」（弱化辅助）。
+class _StealTag extends StatelessWidget {
+  const _StealTag({required this.text, this.subtle = false});
+
+  final String text;
+  final bool subtle;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = FarmColorScheme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: subtle ? colors.surfaceSubtle : colors.surfaceSelected,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: FarmTextStyles.statusText.copyWith(
+          color: subtle ? colors.textTertiary : colors.primary,
+        ),
       ),
     );
   }

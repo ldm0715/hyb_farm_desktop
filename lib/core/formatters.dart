@@ -32,6 +32,23 @@ String formatCountdown(int seconds) {
   return h > 0 ? '$h:${two(m)}:${two(s)}' : '${two(m)}:${two(s)}';
 }
 
+/// 时刻 → 人性化相对时间（"刚刚" / "N 分钟前" / "N 小时前" / "N 天前"）。
+///
+/// [now] 可注入固定当前时间（测试用），默认 `DateTime.now()`。
+/// 未来时刻或系统时钟回拨时统一按「刚刚」处理，杜绝负时长。
+/// 注意：本函数只负责格式化，不做 24h 过期判定（过期由 StealHistory 负责）；
+/// 因此恰好 24 小时前仍输出「1 天前」。
+String formatRelativeTime(DateTime? value, {DateTime? now}) {
+  if (value == null) return '暂无';
+  final ref = now ?? DateTime.now();
+  if (!value.isBefore(ref)) return '刚刚'; // 未来/同一时刻 → 刚刚
+  final diff = ref.difference(value);
+  if (diff.inMinutes < 1) return '刚刚';
+  if (diff.inMinutes < 60) return '${diff.inMinutes} 分钟前';
+  if (diff.inHours < 24) return '${diff.inHours} 小时前';
+  return '${diff.inDays} 天前';
+}
+
 /// 秒 → 人性化剩余时长（"2小时13分" / "5分" / "已成熟"）。
 String formatRemaining(int seconds) {
   if (seconds <= 0) return '已成熟';

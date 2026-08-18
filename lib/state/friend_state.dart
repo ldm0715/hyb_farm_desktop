@@ -8,6 +8,7 @@ import 'package:hyb_farm_desktop/api/models.dart';
 import 'package:hyb_farm_desktop/core/constants.dart';
 import 'package:hyb_farm_desktop/core/operation_coordinator.dart';
 import 'package:hyb_farm_desktop/core/resource_cache.dart';
+import 'package:hyb_farm_desktop/services/steal_history.dart';
 
 /// 偷菜结果提示类型。
 enum StealNoticeType { success, error }
@@ -16,9 +17,11 @@ class FriendState extends ChangeNotifier {
   FriendState({
     required FarmApi api,
     required OperationCoordinator coordinator,
+    required StealHistory stealHistory,
     DateTime Function()? now,
   }) : _api = api,
        _coordinator = coordinator,
+       _stealHistory = stealHistory,
        _listCache = ResourceCache<List<FriendSummary>>(
          ttl: kFriendsListCacheTtl,
          minInterval: kMinRequestInterval,
@@ -28,6 +31,7 @@ class FriendState extends ChangeNotifier {
 
   final FarmApi _api;
   final OperationCoordinator _coordinator;
+  final StealHistory _stealHistory;
   final ResourceCache<List<FriendSummary>> _listCache;
 
   List<FriendFarm> _statuses = const [];
@@ -63,6 +67,10 @@ class FriendState extends ChangeNotifier {
   }
 
   bool get isStealCoolingDown => stealCooldownRemainingSeconds > 0;
+
+  /// 本机记录的某好友最近一次成功偷菜时间（24h 内有效，过期返回 null）。
+  /// 纯读，不触发任何持久化写操作。
+  DateTime? lastStealAt(String friendId) => _stealHistory.lastStealAt(friendId);
 
   /// 拉取好友列表并按当前页加载详情；列表失败/为空时清空状态。
   /// [force] 强制重拉列表（绕过 5min TTL），手动刷新按钮用；切 tab 默认 false。
@@ -176,6 +184,14 @@ class FriendState extends ChangeNotifier {
 
     try {
       final result = await _coordinator.run(() => _api.stealFriend(friendId));
+      try {
+        // 历史存储 best-effort：失败不掩盖服务端偷菜成功、不进通用失败提示。
+        // record 先更新内存，持久化失败时本会话仍显示「已偷·刚刚」。
+        await _stealHistory.record(friendId, _stealHistory.now);
+      } catch (_) {
+        // 仅影响跨会话保留；内存记录已写入，本会话仍可见。
+        // catch (_) 覆盖 _save 抛出的 StateError（Error 而非 Exception）。
+      }
       _detailCache.remove(friendId);
       try {
         // 偷菜改变了好友可偷态，force 重拉列表（绕过 5min TTL）。

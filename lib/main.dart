@@ -24,6 +24,7 @@ import 'services/notification_service.dart';
 import 'services/power_service.dart';
 import 'services/recycle_service.dart';
 import 'services/replant_service.dart';
+import 'services/steal_history.dart';
 import 'services/update_service.dart';
 import 'state/connection_state_store.dart';
 import 'state/farm_state.dart';
@@ -99,6 +100,8 @@ Future<void> main() async {
   });
   final harvestLog = await HarvestLog.create();
   final careLog = await CareLog.create();
+  // 偷菜历史：单账号模型（无稳定账号 id、单一 Cookie），不传 accountId。
+  final stealHistory = await StealHistory.create();
   final scheduler = HarvestScheduler(
     api: farmApi,
     farmState: farmState,
@@ -119,7 +122,11 @@ Future<void> main() async {
     backoff: backoff,
   );
   final power = PowerService();
-  final friendState = FriendState(api: farmApi, coordinator: coordinator);
+  final friendState = FriendState(
+    api: farmApi,
+    coordinator: coordinator,
+    stealHistory: stealHistory,
+  );
   final challengeVerifier = ChallengeVerifier(
     store: connectionStore,
     auth: auth,

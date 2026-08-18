@@ -683,7 +683,7 @@ class _AutomationActivityCardState extends State<_AutomationActivityCard> {
         ),
         const Spacer(),
         Text(
-          '$total · 最近 ${_recentLabel(lastAt)}',
+          '$total · 最近 ${formatRelativeTime(lastAt)}',
           style: FarmTextStyles.bodyEmphasis.copyWith(
             color: colors.textPrimary,
             fontFeatures: kTabularFigures,
@@ -813,14 +813,6 @@ class _AutomationActivityCardState extends State<_AutomationActivityCard> {
     );
   }
 
-  String _recentLabel(DateTime? at) {
-    if (at == null) return '暂无';
-    final diff = DateTime.now().difference(at);
-    if (diff.inMinutes < 1) return '刚刚';
-    if (diff.inMinutes < 60) return '${diff.inMinutes} 分钟前';
-    if (diff.inHours < 24) return '${diff.inHours} 小时前';
-    return '${diff.inDays} 天前';
-  }
 }
 
 /// challengeRequired 时的紧凑警告 Banner。
