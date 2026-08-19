@@ -91,13 +91,13 @@ void main() {
     );
   });
 
-  test('403 无特征信号 → 不判失效，抛 ApiNetworkException', () async {
+  test('403 无特征信号 → 403 兜底抛 ChallengeException', () async {
     final adapter = _FakeAdapter((_) async => _jsonBody('{}', status: 403));
     final client = _clientWith(adapter);
 
     await expectLater(
       client.get('/api/farm/crops'),
-      throwsA(isA<ApiNetworkException>()),
+      throwsA(isA<ChallengeException>()),
     );
   });
 

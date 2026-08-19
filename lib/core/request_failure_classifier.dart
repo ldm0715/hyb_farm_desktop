@@ -282,6 +282,23 @@ ClassificationResult classifyRequest({
     );
   }
 
+  // —— 403 兜底：未命中 challenge/auth/rateLimit 分类的 403 默认判为疑似 Cloudflare 验证 ——
+  // 其他无法识别的 403 仍需用户介入，保守视为疑似验证，防止自动化继续重试。
+  if (status == 403) {
+    return ClassificationResult(
+      state: FarmConnectionState.challengeRequired,
+      reason: 'HTTP 403（疑似 Cloudflare 验证）',
+      confidence: 0.5,
+      diagnostics: ConnectionDiagnostics(
+        statusCode: status,
+        url: url,
+        contentType: contentType,
+        reason: 'HTTP 403（疑似 Cloudflare 验证）',
+        confidence: 0.5,
+      ),
+    );
+  }
+
   // —— 优先级 4：服务端错误 ——
   if (status >= 500 && status <= 599) {
     return ClassificationResult(

@@ -41,7 +41,7 @@ void main() {
     expect(r.state, FarmConnectionState.challengeRequired);
   });
 
-  test('4. 403 + server: cloudflare 但无其他信号 → 不判 challengeRequired', () {
+  test('4. 403 + server: cloudflare 但无其他信号 → 403 兜底判 challengeRequired', () {
     final r = classifyRequest(
       statusCode: 403,
       headers: {
@@ -50,7 +50,9 @@ void main() {
       body: 'Forbidden',
       contentType: 'application/json',
     );
-    expect(r.state, isNot(FarmConnectionState.challengeRequired));
+    expect(r.state, FarmConnectionState.challengeRequired);
+    expect(r.diagnostics.reason, 'HTTP 403（疑似 Cloudflare 验证）');
+    expect(r.diagnostics.confidence, 0.5);
   });
 
   test('5. 401 → authRequired', () {
@@ -107,7 +109,7 @@ void main() {
     expect(r.state, isNot(FarmConnectionState.authRequired));
   });
 
-  test('403 + cf-ray 单独出现（无文本特征、非 html）→ 不判 challenge', () {
+  test('403 + cf-ray 单独出现（无文本特征、非 html）→ 403 兜底判 challengeRequired', () {
     final r = classifyRequest(
       statusCode: 403,
       headers: {
@@ -116,7 +118,9 @@ void main() {
       body: 'forbidden',
       contentType: 'application/json',
     );
-    expect(r.state, isNot(FarmConnectionState.challengeRequired));
+    expect(r.state, FarmConnectionState.challengeRequired);
+    expect(r.diagnostics.reason, 'HTTP 403（疑似 Cloudflare 验证）');
+    expect(r.diagnostics.confidence, 0.5);
   });
 
   test('sanitizeUrl 丢弃 query 参数', () {
@@ -124,5 +128,67 @@ void main() {
       sanitizeUrl('https://cdk.hybgzs.com/api/farm/crops?token=secret&a=1'),
       'https://cdk.hybgzs.com/api/farm/crops',
     );
+  });
+
+  // —— 403 兜底测试 ——
+
+  test('普通 JSON 403（无 auth/challenge/rateLimit 特征）→ 兜底 challengeRequired', () {
+    final r = classifyRequest(
+      statusCode: 403,
+      body: {'success': false, 'error': {'code': 403, 'message': 'Forbidden'}},
+      contentType: 'application/json',
+    );
+    expect(r.state, FarmConnectionState.challengeRequired);
+    expect(r.diagnostics.reason, 'HTTP 403（疑似 Cloudflare 验证）');
+    expect(r.diagnostics.confidence, 0.5);
+    expect(r.diagnostics.statusCode, 403);
+  });
+
+  test('空 body 的 403 → 兜底 challengeRequired', () {
+    final r = classifyRequest(statusCode: 403, body: null);
+    expect(r.state, FarmConnectionState.challengeRequired);
+    expect(r.diagnostics.confidence, 0.5);
+  });
+
+  test('403 + body 明确未登录 → 仍为 authRequired（auth 优先于兜底）', () {
+    final r = classifyRequest(
+      statusCode: 403,
+      body: {
+        'success': false,
+        'error': {'code': 401, 'message': '未登录'},
+      },
+      contentType: 'application/json',
+    );
+    expect(r.state, FarmConnectionState.authRequired);
+  });
+
+  test('403 + cf-mitigated → 仍为 challengeRequired（明确 challenge 优先于兜底）', () {
+    final r = classifyRequest(
+      statusCode: 403,
+      headers: {
+        'cf-mitigated': ['challenge'],
+      },
+      body: 'blocked',
+      contentType: 'text/html',
+    );
+    expect(r.state, FarmConnectionState.challengeRequired);
+    // 命中强信号，confidence 应高于兜底的 0.5
+    expect(r.diagnostics.confidence, greaterThan(0.5));
+  });
+
+  test('429 → 仍为 rateLimited（不受 403 兜底影响）', () {
+    final now = DateTime(2026, 8, 15, 12, 0, 0);
+    final r = classifyRequest(
+      statusCode: 429,
+      headers: {'retry-after': ['120']},
+      body: 'too many requests',
+      now: now,
+    );
+    expect(r.state, FarmConnectionState.rateLimited);
+  });
+
+  test('500 → 仍为 serverError（不受 403 兜底影响）', () {
+    final r = classifyRequest(statusCode: 500, body: '{}');
+    expect(r.state, FarmConnectionState.serverError);
   });
 }
