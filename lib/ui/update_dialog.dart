@@ -12,11 +12,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
 import 'package:hyb_farm_desktop/core/desktop_shell.dart';
+import 'package:hyb_farm_desktop/core/download_sources.dart';
 import 'package:hyb_farm_desktop/core/formatters.dart';
 import 'package:hyb_farm_desktop/core/log/app_logger.dart';
 import 'package:hyb_farm_desktop/services/update_service.dart';
+import 'package:hyb_farm_desktop/state/settings_state.dart';
 import 'package:hyb_farm_desktop/theme/farm_theme.dart';
 import 'package:hyb_farm_desktop/tray/tray_manager.dart';
+import 'mirror_list_dialog.dart';
 
 /// 发现新版本。
 ///
@@ -66,12 +69,54 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   CancelToken? _cancel;
   bool _installing = false;
 
+  /// 本次下载的下载源（当次有效，不写回设置）；初值取设置默认，经 [ensureMirrorRiskAccepted]
+  /// 门控后切换。始终是守卫后的合法值（[kDownloadSourceOfficial]/[kDownloadSourceAuto]/启用镜像）。
+  late String _source;
+
+  /// 当前尝试来源展示名（`onCandidate` 驱动，下载中显示）。
+  String? _activeCandidateName;
+
+  @override
+  void initState() {
+    super.initState();
+    final settings = context.read<SettingsState>();
+    _source = _guardSource(settings.downloadSource, settings);
+  }
+
+  /// 非法/已停用 source 回落官方，避免 DropdownButton value 不在 items 里。
+  String _guardSource(String source, SettingsState settings) {
+    if (source == kDownloadSourceOfficial || source == kDownloadSourceAuto) {
+      return source;
+    }
+    if (isMirrorSource(source)) {
+      final id = source.substring('mirror:'.length);
+      if (settings.downloadMirrors.any((m) => m.id == id && m.enabled)) {
+        return source;
+      }
+    }
+    return kDownloadSourceOfficial;
+  }
+
+  /// 下拉选项里的启用镜像。由调用方按 [source]/[mirrors] 解析候选。
+  Future<void> _changeSource(String value) async {
+    if (value == _source) return;
+    final settings = context.read<SettingsState>();
+    // 仅在会实际使用第三方下载时提示风险确认。
+    if (sourceUsesThirdParty(value, settings.downloadMirrors)) {
+      final ok = await ensureMirrorRiskAccepted(context, settings);
+      if (!ok || !mounted) return;
+    }
+    setState(() => _source = value);
+  }
+
   Future<void> _startDownload() async {
+    final settings = context.read<SettingsState>();
     setState(() {
       _phase = _Phase.downloading;
       _received = 0;
       _total = 0;
       _error = null;
+      _activeCandidateName = null;
     });
     final token = CancelToken();
     _cancel = token;
@@ -79,7 +124,13 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     try {
       final path = await context.read<UpdateService>().downloadInstaller(
             widget.info,
+            source: _guardSource(_source, settings),
+            mirrors: settings.downloadMirrors,
             cancelToken: token,
+            onCandidate: (c) {
+              if (!mounted) return;
+              setState(() => _activeCandidateName = c.sourceName);
+            },
             onProgress: (received, total) {
               _total = total;
               _received = received;
@@ -273,6 +324,15 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           '正在下载安装包…',
           style: FarmTextStyles.bodyEmphasis.copyWith(color: colors.textPrimary),
         ),
+        if (_activeCandidateName != null) ...[
+          const SizedBox(height: FarmSpacing.xs),
+          Text(
+            '来源：$_activeCandidateName',
+            style: FarmTextStyles.settingDescription.copyWith(
+              color: colors.textTertiary,
+            ),
+          ),
+        ],
         const SizedBox(height: FarmSpacing.md),
         LinearProgressIndicator(value: value),
         const SizedBox(height: FarmSpacing.sm),
@@ -320,15 +380,72 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     );
   }
 
+  /// 下载源临时切换下拉（仅当次有效，不写回设置）。复用设置页守卫/风险门控逻辑。
+  Widget _buildSourceSelector(FarmColorScheme colors, SettingsState settings) {
+    final current = _guardSource(_source, settings);
+    final items = <DropdownMenuItem<String>>[
+      const DropdownMenuItem(
+        value: kDownloadSourceOfficial,
+        child: Text('官方源'),
+      ),
+      const DropdownMenuItem(
+        value: kDownloadSourceAuto,
+        child: Text('自动（逐个尝试）'),
+      ),
+      for (final m in settings.downloadMirrors)
+        if (m.enabled)
+          DropdownMenuItem(value: mirrorSource(m.id), child: Text(m.name)),
+    ];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: FarmSpacing.sm),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(FarmRadii.control),
+        border: Border.all(color: colors.border),
+      ),
+      child: DropdownButton<String>(
+        value: current,
+        isExpanded: true,
+        isDense: true,
+        underline: const SizedBox.shrink(),
+        items: items,
+        onChanged: (v) {
+          if (v != null) _changeSource(v);
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = FarmColorScheme.of(context);
+    final settings = context.read<SettingsState>();
     return AlertDialog(
       title: const Text('发现新版本'),
       content: SizedBox(
         width: 420,
         child: switch (_phase) {
-          _Phase.idle => _releaseInfo(colors),
+          _Phase.idle => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _releaseInfo(colors),
+                if (widget.info.hasInstaller) ...[
+                  const SizedBox(height: FarmSpacing.md),
+                  Row(
+                    children: [
+                      Text(
+                        '下载源',
+                        style: FarmTextStyles.settingDescription.copyWith(
+                          color: colors.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(width: FarmSpacing.sm),
+                      Expanded(child: _buildSourceSelector(colors, settings)),
+                    ],
+                  ),
+                ],
+              ],
+            ),
           _Phase.downloading => _buildDownloading(colors),
           _Phase.ready => _buildReady(colors),
           _Phase.failed => _buildFailed(colors),
@@ -375,6 +492,15 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('取消'),
             ),
+            if (_guardSource(_source, settings) != kDownloadSourceOfficial)
+              TextButton(
+                // 指定镜像失败不静默回退：显式提供「改用官方源重试」。
+                onPressed: () {
+                  setState(() => _source = kDownloadSourceOfficial);
+                  _startDownload();
+                },
+                child: const Text('改用官方源重试'),
+              ),
             FilledButton(
               onPressed: _startDownload,
               child: const Text('重试'),

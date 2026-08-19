@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:hyb_farm_desktop/auth/auth_service.dart';
 import 'package:hyb_farm_desktop/core/constants.dart';
 import 'package:hyb_farm_desktop/core/desktop_shell.dart';
+import 'package:hyb_farm_desktop/core/download_sources.dart';
 import 'package:hyb_farm_desktop/core/farm_connection_state.dart';
 import 'package:hyb_farm_desktop/core/formatters.dart';
 import 'package:hyb_farm_desktop/core/log/app_logger.dart';
@@ -20,6 +21,7 @@ import 'package:hyb_farm_desktop/theme/farm_theme.dart';
 import 'account_dialog.dart';
 import 'log_directory_dialog.dart';
 import 'log_viewer_dialog.dart';
+import 'mirror_list_dialog.dart';
 import 'update_dialog.dart';
 import 'widgets/farm_icon.dart';
 import 'widgets/vip_avatar.dart';
@@ -240,6 +242,41 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
         _SettingsGroup(
+          title: '第三方下载镜像',
+          children: [
+            ListTile(
+              title: const Text('下载源'),
+              subtitle: const Text('第三方镜像由第三方提供，不保证安全、速度与可用性'),
+              contentPadding: EdgeInsets.zero,
+              trailing: _settingControl(
+                DropdownButton<String>(
+                  value: _downloadSourceValue(settings),
+                  underline: const SizedBox.shrink(),
+                  isExpanded: true,
+                  isDense: true,
+                  items: _downloadSourceItems(settings),
+                  onChanged: (v) {
+                    if (v != null) _changeDownloadSource(v);
+                  },
+                ),
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.dns_outlined, color: colors.textSecondary),
+              title: const Text('镜像列表'),
+              subtitle: Text(
+                '${settings.downloadMirrors.length} 个镜像（内置 + 自定义）',
+                style: FarmTextStyles.settingDescription.copyWith(
+                  color: colors.textSecondary,
+                ),
+              ),
+              trailing: Icon(Icons.chevron_right, color: colors.textTertiary),
+              contentPadding: EdgeInsets.zero,
+              onTap: () => showDownloadMirrorsDialog(context),
+            ),
+          ],
+        ),
+        _SettingsGroup(
           title: '关于与数据',
           children: [
             ListTile(
@@ -296,6 +333,44 @@ class _SettingsPageState extends State<SettingsPage> {
     final root = settings.logDirectory ?? AppLogger.instance.logsRoot;
     if (root == null || root.isEmpty) return '默认目录';
     return logsDirFor(root);
+  }
+
+  /// 当前选中下载源（若已停用/删除则回落官方，避免 DropdownButton value 不在 items 里）。
+  String _downloadSourceValue(SettingsState settings) {
+    final s = settings.downloadSource;
+    if (s == kDownloadSourceOfficial || s == kDownloadSourceAuto) return s;
+    if (isMirrorSource(s)) {
+      final id = s.substring('mirror:'.length);
+      if (settings.downloadMirrors.any((m) => m.id == id && m.enabled)) return s;
+    }
+    return kDownloadSourceOfficial;
+  }
+
+  List<DropdownMenuItem<String>> _downloadSourceItems(SettingsState settings) {
+    return [
+      const DropdownMenuItem(
+        value: kDownloadSourceOfficial,
+        child: Text('官方源'),
+      ),
+      const DropdownMenuItem(
+        value: kDownloadSourceAuto,
+        child: Text('自动（逐个尝试）'),
+      ),
+      for (final m in settings.downloadMirrors)
+        if (m.enabled)
+          DropdownMenuItem(value: mirrorSource(m.id), child: Text(m.name)),
+    ];
+  }
+
+  Future<void> _changeDownloadSource(String value) async {
+    final settings = context.read<SettingsState>();
+    if (value == settings.downloadSource) return;
+    // 仅在会实际使用第三方下载时提示风险确认。
+    if (sourceUsesThirdParty(value, settings.downloadMirrors)) {
+      final ok = await ensureMirrorRiskAccepted(context, settings);
+      if (!ok) return;
+    }
+    settings.downloadSource = value;
   }
 
   Future<void> _checkUpdate(BuildContext context) async {

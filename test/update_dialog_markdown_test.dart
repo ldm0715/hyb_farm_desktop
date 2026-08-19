@@ -9,11 +9,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hyb_farm_desktop/services/update_service.dart';
+import 'package:hyb_farm_desktop/state/settings_state.dart';
 import 'package:hyb_farm_desktop/theme/farm_theme.dart';
 import 'package:hyb_farm_desktop/ui/update_dialog.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   testWidgets('更新说明经 MarkdownBody 渲染标题与列表而非裸字符', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = await SettingsState.create();
+
     const info = UpdateInfo(
       tagName: 'v0.1.4',
       name: '',
@@ -21,15 +27,21 @@ void main() {
       htmlUrl: '',
     );
 
-    await tester.pumpWidget(MaterialApp(
-      theme: buildLightTheme(),
-      home: Builder(
-        builder: (context) => TextButton(
-          onPressed: () => showUpdateDialog(context, info),
-          child: const Text('go'),
+    // 对话框 build 会读取 SettingsState（下载源下拉），需注入 Provider。
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: settings,
+        child: MaterialApp(
+          theme: buildLightTheme(),
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showUpdateDialog(context, info),
+              child: const Text('go'),
+            ),
+          ),
         ),
       ),
-    ));
+    );
     await tester.tap(find.text('go'));
     await tester.pumpAndSettle();
 

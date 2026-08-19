@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hyb_farm_desktop/core/download_sources.dart';
 import 'package:hyb_farm_desktop/services/update_service.dart';
 
 /// 内联 fake adapter：返回固定字节与 content-length，供 download 测试、不碰网络。
@@ -28,6 +31,65 @@ class _BytesAdapter implements HttpClientAdapter {
   @override
   void close({bool force = false}) {}
 }
+
+/// 按 URL 路由的 fake adapter：首个匹配的 route 生效，无匹配返回 404。
+class _Route {
+  _Route(this.matches, this.bytes, {this.statusCode = 200});
+
+  final bool Function(String url) matches;
+  final List<int> bytes;
+  final int statusCode;
+}
+
+class _RoutingAdapter implements HttpClientAdapter {
+  _RoutingAdapter(this.routes);
+
+  final List<_Route> routes;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    final url = options.uri.toString();
+    for (final r in routes) {
+      if (r.matches(url)) {
+        return ResponseBody.fromBytes(
+          r.bytes is Uint8List
+              ? r.bytes as Uint8List
+              : Uint8List.fromList(r.bytes),
+          r.statusCode,
+          headers: {Headers.contentLengthHeader: [r.bytes.length.toString()]},
+        );
+      }
+    }
+    return ResponseBody.fromBytes(
+      Uint8List(0),
+      404,
+      headers: {Headers.contentLengthHeader: ['0']},
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+/// 生成带 MZ 头的字节（`_basicFileCheck` 要求 Windows 可执行头）。
+Uint8List _mzBytes(int size) {
+  final b = Uint8List(size);
+  b[0] = 0x4D;
+  b[1] = 0x5A;
+  return b;
+}
+
+const _officialUrl =
+    'https://github.com/ldm0715/hyb_farm_desktop/releases/download/v0.2.0/'
+    'HYB-Farm-Desktop-0.2.0-Setup.exe';
+const _checksumUrl =
+    'https://github.com/ldm0715/hyb_farm_desktop/releases/download/v0.2.0/'
+    'HYB-Farm-Desktop-0.2.0-SHA256.txt';
+const _installerName = 'HYB-Farm-Desktop-0.2.0-Setup.exe';
 
 void main() {
   test('UpdateInfo.fromJson 解析字段', () {
@@ -57,6 +119,7 @@ void main() {
     expect(info.installerUrl, isNull);
     expect(info.installerName, isNull);
     expect(info.installerSize, isNull);
+    expect(info.checksumUrl, isNull);
   });
 
   test('hasUpdate 用注入的 currentVersion 比较', () {
@@ -68,7 +131,7 @@ void main() {
     expect(svc.hasUpdate(info('v0.1.1')), isFalse);
   });
 
-  test('fromJson 解析 Setup 安装包资产', () {
+  test('fromJson 解析 Setup 安装包资产与 SHA256 清单', () {
     final info = UpdateInfo.fromJson(const {
       'tag_name': 'v0.2.0',
       'assets': [
@@ -79,8 +142,7 @@ void main() {
         },
         {
           'name': 'HYB-Farm-Desktop-0.2.0-Setup.exe',
-          'browser_download_url':
-              'https://github.com/ldm0715/hyb_farm_desktop/releases/download/v0.2.0/HYB-Farm-Desktop-0.2.0-Setup.exe',
+          'browser_download_url': _officialUrl,
           'size': 12345678,
         },
       ],
@@ -90,6 +152,7 @@ void main() {
     expect(info.installerUrl, contains('Setup.exe'));
     expect(info.installerName, 'HYB-Farm-Desktop-0.2.0-Setup.exe');
     expect(info.installerSize, 12345678);
+    expect(info.checksumUrl, contains('SHA256.txt'));
   });
 
   test('fromJson 无 Setup 资产时 installer 字段为 null', () {
@@ -128,16 +191,31 @@ void main() {
           'tag_name': 'v0.2.0',
           'assets': [
             {
-              'name': 'HYB-Farm-Desktop-0.2.0-Setup.exe',
-              'browser_download_url':
-                  'https://github.com/ldm0715/hyb_farm_desktop/releases/download/v0.2.0/HYB-Farm-Desktop-0.2.0-Setup.exe',
+              'name': _installerName,
+              'browser_download_url': _officialUrl,
+              'size': 4096,
+            },
+          ],
+        });
+
+    UpdateInfo infoWithChecksum() => UpdateInfo.fromJson(const {
+          'tag_name': 'v0.2.0',
+          'assets': [
+            {
+              'name': 'HYB-Farm-Desktop-0.2.0-SHA256.txt',
+              'browser_download_url': _checksumUrl,
+              'size': 200,
+            },
+            {
+              'name': _installerName,
+              'browser_download_url': _officialUrl,
               'size': 4096,
             },
           ],
         });
 
     test('下载到专用目录并 rename 成 .exe，无 .part 残留', () async {
-      final bytes = Uint8List.fromList(List.generate(4096, (i) => i % 256));
+      final bytes = _mzBytes(4096);
       final svc = UpdateService(
         dio: Dio()..httpClientAdapter = _BytesAdapter(bytes),
         updatesDir: tempDir.path,
@@ -145,7 +223,7 @@ void main() {
 
       final path = await svc.downloadInstaller(infoWithAsset());
 
-      expect(path, endsWith('HYB-Farm-Desktop-0.2.0-Setup.exe'));
+      expect(path, endsWith(_installerName));
       final f = File(path);
       expect(f.existsSync(), isTrue);
       expect(f.lengthSync(), 4096);
@@ -177,7 +255,7 @@ void main() {
     });
 
     test('进度回调收到 received/total 且 total>0', () async {
-      final bytes = Uint8List.fromList(List.generate(2048, (i) => 1));
+      final bytes = _mzBytes(2048);
       final svc = UpdateService(
         dio: Dio()..httpClientAdapter = _BytesAdapter(bytes),
         updatesDir: tempDir.path,
@@ -195,6 +273,159 @@ void main() {
 
       expect(gotReceived, 2048);
       expect(gotTotal, greaterThan(0));
+    });
+
+    test('有清单且 SHA256 匹配则成功', () async {
+      final bytes = _mzBytes(4096);
+      final hex = sha256.convert(bytes).toString();
+      final manifest = utf8.encode('$hex  $_installerName\n');
+      final svc = UpdateService(
+        dio: Dio()
+          ..httpClientAdapter = _RoutingAdapter([
+            _Route((u) => u == _checksumUrl, manifest),
+            _Route((u) => u == _officialUrl, bytes),
+          ]),
+        updatesDir: tempDir.path,
+      );
+
+      final path = await svc.downloadInstaller(infoWithChecksum());
+
+      expect(path, endsWith(_installerName));
+      expect(File(path).lengthSync(), 4096);
+      expect(
+        tempDir
+            .listSync()
+            .whereType<File>()
+            .where((e) => e.path.endsWith('.part')),
+        isEmpty,
+      );
+    });
+
+    test('有清单但 SHA256 不匹配则拒绝并清理 .part', () async {
+      final bytes = _mzBytes(4096);
+      final manifest = utf8.encode('${'0' * 64}  $_installerName\n');
+      final svc = UpdateService(
+        dio: Dio()
+          ..httpClientAdapter = _RoutingAdapter([
+            _Route((u) => u == _checksumUrl, manifest),
+            _Route((u) => u == _officialUrl, bytes),
+          ]),
+        updatesDir: tempDir.path,
+      );
+
+      await expectLater(
+        svc.downloadInstaller(infoWithChecksum()),
+        throwsA(isA<FormatException>()),
+      );
+      expect(tempDir.listSync().whereType<File>(), isEmpty);
+    });
+
+    test('无校验清单且含第三方候选则拒绝下载', () async {
+      final svc = UpdateService(
+        dio: Dio(),
+        updatesDir: tempDir.path,
+      );
+
+      await expectLater(
+        svc.downloadInstaller(
+          infoWithAsset(),
+          source: kDownloadSourceAuto,
+        ),
+        throwsA(isA<FormatException>()),
+      );
+      expect(tempDir.listSync().whereType<File>(), isEmpty);
+    });
+
+    test('auto 模式：镜像失败后回退官方成功，onCandidate 记录来源顺序', () async {
+      final bytes = _mzBytes(4096);
+      final hex = sha256.convert(bytes).toString();
+      final manifest = utf8.encode('$hex  $_installerName\n');
+      final mirror = kDefaultDownloadMirrors.first;
+      final mirrorUrl = '${mirror.prefix}$_officialUrl';
+      final svc = UpdateService(
+        dio: Dio()
+          ..httpClientAdapter = _RoutingAdapter([
+            _Route((u) => u == _checksumUrl, manifest),
+            _Route((u) => u == mirrorUrl, const [], statusCode: 500),
+            _Route((u) => u == _officialUrl, bytes),
+          ]),
+        updatesDir: tempDir.path,
+      );
+      final tried = <String>[];
+
+      final path = await svc.downloadInstaller(
+        infoWithChecksum(),
+        source: kDownloadSourceAuto,
+        mirrors: [mirror],
+        onCandidate: (c) => tried.add(c.sourceId),
+      );
+
+      expect(path, endsWith(_installerName));
+      expect(tried, ['gh-proxy', kDownloadSourceOfficial]);
+      expect(
+        tempDir
+            .listSync()
+            .whereType<File>()
+            .where((e) => e.path.endsWith('.part')),
+        isEmpty,
+      );
+    });
+
+    test('指定镜像失败不自动回退官方', () async {
+      final bytes = _mzBytes(4096);
+      final hex = sha256.convert(bytes).toString();
+      final manifest = utf8.encode('$hex  $_installerName\n');
+      final mirror = kDefaultDownloadMirrors.first;
+      final mirrorUrl = '${mirror.prefix}$_officialUrl';
+      final svc = UpdateService(
+        dio: Dio()
+          ..httpClientAdapter = _RoutingAdapter([
+            _Route((u) => u == _checksumUrl, manifest),
+            _Route((u) => u == mirrorUrl, const [], statusCode: 500),
+            // 官方路由存在，但指定镜像模式下不应被尝试。
+            _Route((u) => u == _officialUrl, bytes),
+          ]),
+        updatesDir: tempDir.path,
+      );
+      final tried = <String>[];
+
+      await expectLater(
+        svc.downloadInstaller(
+          infoWithChecksum(),
+          source: mirrorSource(mirror.id),
+          mirrors: [mirror],
+          onCandidate: (c) => tried.add(c.sourceId),
+        ),
+        throwsA(isA<DioException>()),
+      );
+      expect(tried, ['gh-proxy']);
+      expect(tempDir.listSync().whereType<File>(), isEmpty);
+    });
+
+    test('预取消的 cancelToken 立即停止，不尝试任何来源', () async {
+      final svc = UpdateService(
+        dio: Dio(),
+        updatesDir: tempDir.path,
+      );
+      final token = CancelToken()..cancel();
+      final tried = <String>[];
+
+      await expectLater(
+        svc.downloadInstaller(
+          infoWithAsset(),
+          cancelToken: token,
+          onCandidate: (c) => tried.add(c.sourceId),
+        ),
+        throwsA(
+          isA<DioException>().having(
+            (e) => e.type,
+            'type',
+            DioExceptionType.cancel,
+          ),
+        ),
+      );
+      expect(tried, isEmpty);
+      expect(tempDir.listSync().whereType<File>(), isEmpty);
     });
   });
 

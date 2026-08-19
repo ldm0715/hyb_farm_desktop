@@ -1,8 +1,12 @@
 /// 应用设置：开关、种子、主题、关闭行为、测活间隔、通知，持久化到 shared_preferences。
 library;
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:hyb_farm_desktop/core/download_sources.dart';
 
 /// 关闭窗口时的行为。
 enum CloseBehavior { minimizeToTray, exit }
@@ -24,6 +28,10 @@ class SettingsState extends ChangeNotifier {
   static const _kWindowY = 'hyb-farm-window-y';
   static const _kLogDirectory = 'hyb-farm-log-directory';
   static const _kPreventSleep = 'hyb-farm-prevent-sleep';
+  static const _kDownloadSource = 'hyb-farm-download-source';
+  static const _kDownloadMirrors = 'hyb-farm-download-mirrors';
+  static const _kDownloadMirrorRiskAccepted =
+      'hyb-farm-download-mirror-risk-accepted';
 
   final SharedPreferences _prefs;
 
@@ -161,6 +169,55 @@ class SettingsState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 更新安装包下载源：`official` / `auto` / `mirror:<id>`。默认官方源。
+  String _downloadSource = kDownloadSourceOfficial;
+  String get downloadSource => _downloadSource;
+  set downloadSource(String v) {
+    _downloadSource = v;
+    _prefs.setString(_kDownloadSource, v);
+    notifyListeners();
+  }
+
+  /// 第三方下载镜像列表（含内置与自定义，按用户排序）。载入时与内置定义合并。
+  List<DownloadMirror> _downloadMirrors = List.of(kDefaultDownloadMirrors);
+  List<DownloadMirror> get downloadMirrors => List.unmodifiable(_downloadMirrors);
+  set downloadMirrors(List<DownloadMirror> v) {
+    _downloadMirrors = List.of(v);
+    _prefs.setString(
+      _kDownloadMirrors,
+      jsonEncode([for (final m in v) m.toJson()]),
+    );
+    notifyListeners();
+  }
+
+  /// 已确认的第三方镜像风险说明版本号（低于 [kDownloadMirrorRiskVersion] 需重新提示）。
+  int _downloadMirrorRiskAcceptedVersion = 0;
+  int get downloadMirrorRiskAcceptedVersion =>
+      _downloadMirrorRiskAcceptedVersion;
+  set downloadMirrorRiskAcceptedVersion(int v) {
+    _downloadMirrorRiskAcceptedVersion = v;
+    _prefs.setInt(_kDownloadMirrorRiskAccepted, v);
+    notifyListeners();
+  }
+
+  /// 解析持久化的镜像列表；损坏/空值回落空列表（随后与内置合并补齐）。
+  List<DownloadMirror> _readMirrors() {
+    final raw = _prefs.getString(_kDownloadMirrors);
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      final list = <DownloadMirror>[];
+      for (final e in decoded) {
+        final m = DownloadMirror.fromJson(e);
+        if (m != null) list.add(m);
+      }
+      return list;
+    } catch (_) {
+      return const [];
+    }
+  }
+
   void _load() {
     _autoHarvest = _prefs.getBool(_kAutoHarvest) ?? false;
     _replantSeedId = _prefs.getString(_kReplantSeed);
@@ -174,6 +231,14 @@ class SettingsState extends ChangeNotifier {
     _notifyAuthExpired = _prefs.getBool(_kNotifyAuth) ?? true;
     _logDirectory = _prefs.getString(_kLogDirectory);
     _preventSleepDuringAutomation = _prefs.getBool(_kPreventSleep) ?? false;
+    _downloadSource =
+        _prefs.getString(_kDownloadSource) ?? kDownloadSourceOfficial;
+    _downloadMirrorRiskAcceptedVersion =
+        _prefs.getInt(_kDownloadMirrorRiskAccepted) ?? 0;
+    _downloadMirrors = mergeDownloadMirrors(
+      _readMirrors(),
+      kDefaultDownloadMirrors,
+    );
     final wx = _prefs.getDouble(_kWindowX);
     final wy = _prefs.getDouble(_kWindowY);
     if (wx != null && wy != null) _windowPosition = Offset(wx, wy);
