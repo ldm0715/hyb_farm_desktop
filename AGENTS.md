@@ -73,3 +73,32 @@ git tag: v0.1.0
 - 不提交 `/build/`、`/dist/`、`.env`、`.pfx`、`.p12`、`.pem`、`.key`。
 - 允许提交 `.github/workflows/release-windows.yml`、`installer/hyb_farm_desktop.iss`、`README.md`、`CHANGELOG.md` 和 `LICENSE`。
 - Windows 构建前关闭 `hyb_farm_desktop.exe`，避免 `WebView2Loader.dll` 被占用。
+## 版本一致性硬性检查
+
+**发布 `vX.Y.Z` 前必须逐项核对，任一不一致即停止发布，不允许仅修改 `pubspec.yaml`：**
+
+1. `pubspec.yaml`：`version: X.Y.Z`（唯一发布版本来源）。
+2. `lib/core/constants.dart`：`kAppVersion` 必须为 `X.Y.Z`；这是设置页展示、应用内更新比较使用的当前版本。
+3. `installer/hyb_farm_desktop.iss`：默认 `MyAppVersion` 必须为 `X.Y.Z`；即使 CI 会通过 `/DMyAppVersion` 覆盖，也不得保留旧的本机构建版本。
+4. `CHANGELOG.md`：必须有且仅有一段 `## [X.Y.Z] - YYYY-MM-DD`。
+5. 创建标签后：Git 标签必须为 `vX.Y.Z`，且标签指向包含上述文件的发布提交。
+
+发布前必须运行以下 PowerShell 检查；输出任一错误就停止，不得创建或推送标签：
+
+```powershell
+$version = ((Select-String -Path pubspec.yaml -Pattern '^version:\s*([^\s+]+)' | Select-Object -First 1).Matches[0].Groups[1].Value)
+$inApp = ((Select-String -Path lib/core/constants.dart -Pattern "kAppVersion\s*=\s*'([^']+)'" | Select-Object -First 1).Matches[0].Groups[1].Value)
+$installer = ((Select-String -Path installer/hyb_farm_desktop.iss -Pattern '#define MyAppVersion "([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value)
+$changelogCount = @(Select-String -Path CHANGELOG.md -Pattern "^## \[$([regex]::Escape($version))\] - \d{4}-\d{2}-\d{2}$").Count
+if ($inApp -ne $version -or $installer -ne $version -or $changelogCount -ne 1) {
+  throw "Version mismatch: pubspec=$version, kAppVersion=$inApp, installer=$installer, changelogSections=$changelogCount"
+}
+```
+
+创建本地标签后、推送前还必须运行：
+
+```powershell
+$tag = "v$version"
+git tag --points-at HEAD | Select-String -SimpleMatch $tag
+if ($LASTEXITCODE -ne 0) { throw "Tag $tag does not point at HEAD." }
+```
