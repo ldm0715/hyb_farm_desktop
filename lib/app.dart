@@ -11,6 +11,7 @@ import 'package:hyb_farm_desktop/services/care_log.dart';
 import 'package:hyb_farm_desktop/services/challenge_verifier.dart';
 import 'package:hyb_farm_desktop/services/harvest_log.dart';
 import 'package:hyb_farm_desktop/services/harvest_scheduler.dart';
+import 'package:hyb_farm_desktop/services/mirror_latency_store.dart';
 import 'package:hyb_farm_desktop/services/notification_service.dart';
 import 'package:hyb_farm_desktop/services/power_service.dart';
 import 'package:hyb_farm_desktop/services/recycle_service.dart';
@@ -45,6 +46,7 @@ class HybFarmApp extends StatelessWidget {
     required this.challengeVerifier,
     required this.power,
     required this.updater,
+    required this.mirrorLatency,
     required this.trayManager,
   });
 
@@ -65,6 +67,7 @@ class HybFarmApp extends StatelessWidget {
   final ChallengeVerifier challengeVerifier;
   final PowerService power;
   final UpdateService updater;
+  final MirrorLatencyStore mirrorLatency;
   final TrayManager trayManager;
 
   @override
@@ -90,6 +93,7 @@ class HybFarmApp extends StatelessWidget {
         Provider<ChallengeVerifier>.value(value: challengeVerifier),
         Provider<PowerService>.value(value: power),
         Provider<UpdateService>.value(value: updater),
+        ChangeNotifierProvider<MirrorLatencyStore>.value(value: mirrorLatency),
         Provider<TrayManager>.value(value: trayManager),
       ],
       child: const _MaterialApp(),

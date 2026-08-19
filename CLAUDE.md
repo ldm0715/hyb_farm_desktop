@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## 项目与仓库边界
 
 - 当前目录 `hyb_farm_desktop/` 是 **HYB Farm Desktop** 的独立 Flutter Windows 项目。
@@ -8,6 +10,25 @@
 - 目标分支：`main`。
 - 不修改父目录的 `.git`、`.gitignore`、提交历史或已跟踪文件。父目录与当前项目是两个不同的 Git 上下文。
 - 以后所有的发布（版本号更新、CHANGELOG、tag、push、Release）都在当前目录 `hyb_farm_desktop/` 内进行，一律不在根目录 `F:\My_Project\flutter_hybai_farm` 发布。
+
+## 架构概览
+
+单进程 Flutter Windows 应用。`main.dart` 手工组装全部依赖（Dio/ApiClient → FarmApi → 各服务/Store）→ `app.dart` 用 `provider` 的 `MultiProvider` 注入 → 按 `AuthService.status` 切登录页/主面板 → `RootShell`（`TabController` 四页签，`IndexedStack` 常驻：农场 / 仓库 / 好友 / 设置）。分层：
+
+- **api/** — `models.dart` 手写 `fromJson` 数据模型；`api_client.dart` Dio 封装（Cookie 注入、15s 超时、响应经 `classifyRequest` 分类映射异常并上报连接状态）；`farm_api.dart` 端点封装。
+- **auth/** — Cookie 校验/持久化（`flutter_secure_storage`）、内置 WebView2 登录、HTTP ↔ WebView Cookie 双向同步。
+- **services/** — 自动化与领域服务：`HarvestScheduler`（精确定时收菜 + 统一恢复协调器 `recoverAndReschedule`）、`AutoCareService`（自持务农定时器）、补种/回收/偷菜（写操作走 `OperationCoordinator` 串行）、`UpdateService`（独立 Dio 查 GitHub + 镜像下载 + **同源 SHA256 校验** + `MirrorLatencyStore` 测速）、通知、日志（`AppLog.d/i/w/e`，禁止 `print`）。
+- **state/** — `ChangeNotifier` 数据源：`FarmState`/`FriendState`/`SettingsState`/`ConnectionStateStore`，`provider` 注入供 UI 读写。
+- **theme/** — 设计令牌层：`FarmColorScheme` 语义色（`FarmColorScheme.of(context)` 是唯一取色入口）、`FarmTextStyles` 排版、`FarmShadow`/`FarmSizes`/`FarmRadii`/`FarmSpacing`。**禁止散落 `Colors.white/black/grey`、`Color(0x…)` 硬编码与 `Theme.of(context).brightness` 分支**。
+- **tray/** — `system_tray` 托盘图标/菜单/窗口显隐（状态/倒计时由 Timer 驱动）。
+- **ui/** — 登录页 + `RootShell` 四页 + 各 Dialog；`widgets/` 共享组件（`VipAvatar`、`FarmIcon`、`DownloadSourceDropdown`、`MirrorLatencyBadge` 等）。
+
+**关键架构不变量**：
+- 请求经 `ApiClient._decode` 统一 `classifyRequest`（401→认证失效、403 challenge→需验证、限流/网络/5xx），结果写 `ConnectionStateStore` 驱动自动化启停与 `RequestBackoff` 退避；数据读多用 `ResourceCache`（TTL/最小间隔/single-flight）治理频率。
+- 写操作（收菜/种植/回收/偷菜）经 `OperationCoordinator` 串行，同一时刻只一个写流程。
+- 金额 = 接口整数 / `kPriceDivisor`(500000)，展示统一 `$` 前缀（`formatters.formatMoney*` 已带，勿手动拼）；作物图标 = `kBaseUrl + seedImage + '_s4.png'`。
+- 字体仅注册 NotoSansSC 400/600、Inter 400/600/700（**禁用 w500**）、JetBrainsMono 400；中文/数字/技术文本分别走 `FarmTextStyles.chineseText`/`numericText`/`monoText`。
+- 完整分层、数据流、测试策略与「非显而易见实现细节」见父目录根 `CLAUDE.md` 与 `docs/` 设计记录（改架构前先读 `docs/flutter_design.md`、`docs/ui-refresh-light-mode.md`、`docs/update-download-mirrors.md`、`docs/request-rate-governance.md` 等）。
 
 ## 发布产物
 
@@ -71,15 +92,25 @@ git push origin vX.Y.Z
 - 不手动上传 `dist/` 下的构建产物；它们应由 GitHub Actions 生成，且已被 `.gitignore` 忽略。
 - 不提交 `.env`、`.pfx`、`.p12`、`.pem`、`.key` 等本地秘密和签名材料。
 
-## 常用验证命令
+## 常用命令
 
 ```bash
-flutter analyze
-flutter test
-flutter build windows --release
+flutter pub get                 # 解析/安装依赖（pubspec.yaml 改动后必跑）
+flutter analyze                 # 静态检查，要求 0 error
+flutter test                    # 全部测试
+flutter test test/<file>.dart   # 单个测试文件
+flutter run -d windows          # 调试运行
+flutter build windows --release # 构建 release EXE
 ```
 
-构建 Windows Release 前需关闭正在运行的 `hyb_farm_desktop.exe`，避免 `WebView2Loader.dll` 被锁定。
+**构建前必须先关闭正在运行的 `hyb_farm_desktop.exe`**——否则 `WebView2Loader.dll` 被进程锁定，`flutter build windows` 报 `MSB3027/MSB3021` 复制失败。可 `taskkill //F //IM hyb_farm_desktop.exe`。Release 产物在 `build/windows/x64/runner/Release/`；改动字体/图标/assets 后必须重新构建才生效。
+
+## 测试约定
+
+- 调度器/Timer 用 `fake_async` 假时钟测试，不真等秒数；`HarvestScheduler`/`FarmState`/`ResourceCache`/`MirrorLatencyStore` 等构造注入 `now`（`DateTime Function()`）供假时钟同步推进。
+- `ApiClient` 可注入 `HttpClientAdapter`；服务层测试用**子类化 `FarmApi` 覆盖方法**返回内存数据，不碰网络。
+- 完整测试策略见父目录根 `CLAUDE.md`「测试」节。
+
 ## 版本一致性硬性检查
 
 **发布 `vX.Y.Z` 前必须逐项核对，任一不一致即停止发布，不允许仅修改 `pubspec.yaml`：**

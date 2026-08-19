@@ -75,6 +75,21 @@ class _RoutingAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+/// 任何请求都抛取消型 DioException 的 fake adapter（测「清单拉取遇取消立即 rethrow」）。
+class _CancelAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    throw DioException(requestOptions: options, type: DioExceptionType.cancel);
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
 /// 生成带 MZ 头的字节（`_basicFileCheck` 要求 Windows 可执行头）。
 Uint8List _mzBytes(int size) {
   final b = Uint8List(size);
@@ -342,9 +357,12 @@ void main() {
       final manifest = utf8.encode('$hex  $_installerName\n');
       final mirror = kDefaultDownloadMirrors.first;
       final mirrorUrl = '${mirror.prefix}$_officialUrl';
+      final mirrorChecksumUrl = '${mirror.prefix}$_checksumUrl';
       final svc = UpdateService(
         dio: Dio()
           ..httpClientAdapter = _RoutingAdapter([
+            // 镜像候选先同源拉清单（成功），再下载安装包（500）→ 回退官方。
+            _Route((u) => u == mirrorChecksumUrl, manifest),
             _Route((u) => u == _checksumUrl, manifest),
             _Route((u) => u == mirrorUrl, const [], statusCode: 500),
             _Route((u) => u == _officialUrl, bytes),
@@ -377,10 +395,12 @@ void main() {
       final manifest = utf8.encode('$hex  $_installerName\n');
       final mirror = kDefaultDownloadMirrors.first;
       final mirrorUrl = '${mirror.prefix}$_officialUrl';
+      final mirrorChecksumUrl = '${mirror.prefix}$_checksumUrl';
       final svc = UpdateService(
         dio: Dio()
           ..httpClientAdapter = _RoutingAdapter([
-            _Route((u) => u == _checksumUrl, manifest),
+            // 镜像同源拉清单成功，安装包下载失败 → 指定镜像不自动回退官方。
+            _Route((u) => u == mirrorChecksumUrl, manifest),
             _Route((u) => u == mirrorUrl, const [], statusCode: 500),
             // 官方路由存在，但指定镜像模式下不应被尝试。
             _Route((u) => u == _officialUrl, bytes),
@@ -399,6 +419,105 @@ void main() {
         throwsA(isA<DioException>()),
       );
       expect(tried, ['gh-proxy']);
+      expect(tempDir.listSync().whereType<File>(), isEmpty);
+    });
+
+    test('镜像候选从同源镜像拉取校验清单并成功（不再碰官方 GitHub）', () async {
+      final bytes = _mzBytes(4096);
+      final hex = sha256.convert(bytes).toString();
+      final manifest = utf8.encode('$hex  $_installerName\n');
+      final mirror = kDefaultDownloadMirrors.first;
+      final mirrorUrl = '${mirror.prefix}$_officialUrl';
+      final mirrorChecksumUrl = '${mirror.prefix}$_checksumUrl';
+      final svc = UpdateService(
+        dio: Dio()
+          ..httpClientAdapter = _RoutingAdapter([
+            // 只路由镜像前缀地址；官方 _checksumUrl/_officialUrl 均无路由（404）。
+            _Route((u) => u == mirrorChecksumUrl, manifest),
+            _Route((u) => u == mirrorUrl, bytes),
+          ]),
+        updatesDir: tempDir.path,
+      );
+      final tried = <String>[];
+
+      final path = await svc.downloadInstaller(
+        infoWithChecksum(),
+        source: mirrorSource(mirror.id),
+        mirrors: [mirror],
+        onCandidate: (c) => tried.add(c.sourceId),
+      );
+
+      expect(path, endsWith(_installerName));
+      expect(File(path).lengthSync(), 4096);
+      expect(tried, ['gh-proxy']);
+      // 官方校验清单/官方安装包一次都没被请求（同源拉取）。
+      expect(
+        tempDir
+            .listSync()
+            .whereType<File>()
+            .where((e) => e.path.endsWith('.part')),
+        isEmpty,
+      );
+    });
+
+    test('镜像候选校验清单获取失败则跳过该候选（auto 落到官方）', () async {
+      final bytes = _mzBytes(4096);
+      final hex = sha256.convert(bytes).toString();
+      final manifest = utf8.encode('$hex  $_installerName\n');
+      final mirror = kDefaultDownloadMirrors.first;
+      final mirrorChecksumUrl = '${mirror.prefix}$_checksumUrl';
+      final svc = UpdateService(
+        dio: Dio()
+          ..httpClientAdapter = _RoutingAdapter([
+            // 镜像同源清单 500 → 该候选被跳过（不进入下载），官方正常走完。
+            _Route((u) => u == mirrorChecksumUrl, const [], statusCode: 500),
+            _Route((u) => u == _checksumUrl, manifest),
+            _Route((u) => u == _officialUrl, bytes),
+          ]),
+        updatesDir: tempDir.path,
+      );
+      final tried = <String>[];
+
+      final path = await svc.downloadInstaller(
+        infoWithChecksum(),
+        source: kDownloadSourceAuto,
+        mirrors: [mirror],
+        onCandidate: (c) => tried.add(c.sourceId),
+      );
+
+      expect(path, endsWith(_installerName));
+      expect(tried, ['gh-proxy', kDownloadSourceOfficial]);
+      expect(
+        tempDir
+            .listSync()
+            .whereType<File>()
+            .where((e) => e.path.endsWith('.part')),
+        isEmpty,
+      );
+    });
+
+    test('校验清单拉取遇取消立即 rethrow，不当作源失败继续', () async {
+      final svc = UpdateService(
+        dio: Dio()..httpClientAdapter = _CancelAdapter(),
+        updatesDir: tempDir.path,
+      );
+      final tried = <String>[];
+
+      await expectLater(
+        svc.downloadInstaller(
+          infoWithChecksum(),
+          onCandidate: (c) => tried.add(c.sourceId),
+        ),
+        throwsA(
+          isA<DioException>().having(
+            (e) => e.type,
+            'type',
+            DioExceptionType.cancel,
+          ),
+        ),
+      );
+      // 取消不在候选上继续（tried 只记录过一次 onCandidate 前的来源）。
+      expect(tried, [kDownloadSourceOfficial]);
       expect(tempDir.listSync().whereType<File>(), isEmpty);
     });
 
@@ -426,6 +545,52 @@ void main() {
       );
       expect(tried, isEmpty);
       expect(tempDir.listSync().whereType<File>(), isEmpty);
+    });
+  });
+
+  group('testMirrorLatency', () {
+    final mirror = kDefaultDownloadMirrors.first;
+    const url = 'https://example.com/x.exe';
+
+    test('2xx 可达且可用，记录延迟', () async {
+      final svc = UpdateService(
+        dio: Dio()..httpClientAdapter = _BytesAdapter(Uint8List(1), statusCode: 200),
+      );
+      final r = await svc.testMirrorLatency(mirror, installerUrl: url);
+      expect(r.reachable, isTrue);
+      expect(r.usable, isTrue);
+      expect(r.latencyMs, isNotNull);
+      expect(r.label, isNotNull);
+      expect(r.label, contains('·'));
+    });
+
+    test('4xx 可达但不可用（不显示为优秀/良好）', () async {
+      final svc = UpdateService(
+        dio: Dio()..httpClientAdapter = _BytesAdapter(const [], statusCode: 404),
+      );
+      final r = await svc.testMirrorLatency(mirror, installerUrl: url);
+      expect(r.reachable, isTrue);
+      expect(r.usable, isFalse);
+      expect(r.label, '异常');
+    });
+
+    test('网络失败不可达', () async {
+      final svc = UpdateService(
+        dio: Dio()..httpClientAdapter = _CancelAdapter(),
+      );
+      final r = await svc.testMirrorLatency(mirror, installerUrl: url);
+      expect(r.reachable, isFalse);
+      expect(r.usable, isFalse);
+      expect(r.label, '不可达');
+    });
+
+    test('无 installerUrl 时测镜像前缀根，任何状态都算可用', () async {
+      final svc = UpdateService(
+        dio: Dio()..httpClientAdapter = _BytesAdapter(const [], statusCode: 403),
+      );
+      final r = await svc.testMirrorLatency(mirror);
+      expect(r.reachable, isTrue);
+      expect(r.usable, isTrue);
     });
   });
 

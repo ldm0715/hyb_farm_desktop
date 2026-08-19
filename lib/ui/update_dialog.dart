@@ -15,11 +15,13 @@ import 'package:hyb_farm_desktop/core/desktop_shell.dart';
 import 'package:hyb_farm_desktop/core/download_sources.dart';
 import 'package:hyb_farm_desktop/core/formatters.dart';
 import 'package:hyb_farm_desktop/core/log/app_logger.dart';
+import 'package:hyb_farm_desktop/services/mirror_latency_store.dart';
 import 'package:hyb_farm_desktop/services/update_service.dart';
 import 'package:hyb_farm_desktop/state/settings_state.dart';
 import 'package:hyb_farm_desktop/theme/farm_theme.dart';
 import 'package:hyb_farm_desktop/tray/tray_manager.dart';
-import 'mirror_list_dialog.dart';
+import 'widgets/download_source_dropdown.dart';
+import 'widgets/mirror_latency_badge.dart';
 
 /// 发现新版本。
 ///
@@ -76,11 +78,19 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   /// 当前尝试来源展示名（`onCandidate` 驱动，下载中显示）。
   String? _activeCandidateName;
 
+  /// 当前尝试来源稳定标识（`official` 或镜像 id），用于下载中显示延迟徽标。
+  String? _activeCandidateSourceId;
+
   @override
   void initState() {
     super.initState();
     final settings = context.read<SettingsState>();
     _source = _guardSource(settings.downloadSource, settings);
+    // 打开即触发镜像测速（供下载页延迟徽标展示）；Store 未注册（测试环境）时安全跳过。
+    final store = context.read<MirrorLatencyStore?>();
+    if (store != null) {
+      Future.microtask(() => store.refreshIfStale(settings.downloadMirrors));
+    }
   }
 
   /// 非法/已停用 source 回落官方，避免 DropdownButton value 不在 items 里。
@@ -97,16 +107,10 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     return kDownloadSourceOfficial;
   }
 
-  /// 下拉选项里的启用镜像。由调用方按 [source]/[mirrors] 解析候选。
-  Future<void> _changeSource(String value) async {
-    if (value == _source) return;
-    final settings = context.read<SettingsState>();
-    // 仅在会实际使用第三方下载时提示风险确认。
-    if (sourceUsesThirdParty(value, settings.downloadMirrors)) {
-      final ok = await ensureMirrorRiskAccepted(context, settings);
-      if (!ok || !mounted) return;
-    }
-    setState(() => _source = value);
+  /// 当前选中源的镜像 id（`official`/`auto` 返回 null），用于展示其延迟徽标。
+  String? _selectedMirrorId(SettingsState settings) {
+    final s = _guardSource(_source, settings);
+    return isMirrorSource(s) ? s.substring('mirror:'.length) : null;
   }
 
   Future<void> _startDownload() async {
@@ -117,6 +121,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       _total = 0;
       _error = null;
       _activeCandidateName = null;
+      _activeCandidateSourceId = null;
     });
     final token = CancelToken();
     _cancel = token;
@@ -129,7 +134,10 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             cancelToken: token,
             onCandidate: (c) {
               if (!mounted) return;
-              setState(() => _activeCandidateName = c.sourceName);
+              setState(() {
+                _activeCandidateName = c.sourceName;
+                _activeCandidateSourceId = c.sourceId;
+              });
             },
             onProgress: (received, total) {
               _total = total;
@@ -310,6 +318,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   }
 
   Widget _buildDownloading(FarmColorScheme colors) {
+    final store = context.watch<MirrorLatencyStore?>();
     final value = _total > 0
         ? (_received / _total).clamp(0.0, 1.0).toDouble()
         : null;
@@ -330,6 +339,17 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             '来源：$_activeCandidateName',
             style: FarmTextStyles.settingDescription.copyWith(
               color: colors.textTertiary,
+            ),
+          ),
+        ],
+        if (_activeCandidateSourceId != null &&
+            _activeCandidateSourceId != kDownloadSourceOfficial) ...[
+          const SizedBox(height: FarmSpacing.xs),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MirrorLatencyBadge(
+              result: store?.resultFor(_activeCandidateSourceId!),
+              testing: store?.testing ?? false,
             ),
           ),
         ],
@@ -380,45 +400,11 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     );
   }
 
-  /// 下载源临时切换下拉（仅当次有效，不写回设置）。复用设置页守卫/风险门控逻辑。
-  Widget _buildSourceSelector(FarmColorScheme colors, SettingsState settings) {
-    final current = _guardSource(_source, settings);
-    final items = <DropdownMenuItem<String>>[
-      const DropdownMenuItem(
-        value: kDownloadSourceOfficial,
-        child: Text('官方源'),
-      ),
-      const DropdownMenuItem(
-        value: kDownloadSourceAuto,
-        child: Text('自动（逐个尝试）'),
-      ),
-      for (final m in settings.downloadMirrors)
-        if (m.enabled)
-          DropdownMenuItem(value: mirrorSource(m.id), child: Text(m.name)),
-    ];
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: FarmSpacing.sm),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(FarmRadii.control),
-        border: Border.all(color: colors.border),
-      ),
-      child: DropdownButton<String>(
-        value: current,
-        isExpanded: true,
-        isDense: true,
-        underline: const SizedBox.shrink(),
-        items: items,
-        onChanged: (v) {
-          if (v != null) _changeSource(v);
-        },
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final colors = FarmColorScheme.of(context);
     final settings = context.read<SettingsState>();
+    final store = context.watch<MirrorLatencyStore?>();
     return AlertDialog(
       title: const Text('发现新版本'),
       content: SizedBox(
@@ -440,7 +426,24 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                         ),
                       ),
                       const SizedBox(width: FarmSpacing.sm),
-                      Expanded(child: _buildSourceSelector(colors, settings)),
+                      // 定宽下拉（与设置页一致），避免撑满整行把延迟徽标挤到下一行。
+                      SizedBox(
+                        width: FarmSizes.settingDropdown,
+                        child: DownloadSourceDropdown(
+                          value: _source,
+                          onChanged: (v) => setState(() => _source = v),
+                        ),
+                      ),
+                      // 当前所选镜像的延迟徽标（官方/自动不显示），紧贴下拉右侧同一行。
+                      if (_selectedMirrorId(settings) != null) ...[
+                        const SizedBox(width: FarmSpacing.sm),
+                        Flexible(
+                          child: MirrorLatencyBadge(
+                            result: store?.resultFor(_selectedMirrorId(settings)!),
+                            testing: store?.testing ?? false,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ],

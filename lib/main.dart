@@ -21,6 +21,7 @@ import 'services/challenge_verifier.dart';
 import 'services/daily_summary_store.dart';
 import 'services/harvest_log.dart';
 import 'services/harvest_scheduler.dart';
+import 'services/mirror_latency_store.dart';
 import 'services/notification_service.dart';
 import 'services/power_service.dart';
 import 'services/price_trend_store.dart';
@@ -48,6 +49,8 @@ Future<void> main() async {
   // init 之后以便清理失败能记日志。
   final updater = UpdateService(updatesDir: updatesDirFor(supportDir.path));
   await updater.cleanupStaleInstallers();
+  // 镜像测速共享数据源：镜像列表对话框与下载源下拉共用同一份延迟结果。
+  final mirrorLatency = MirrorLatencyStore(updateService: updater);
 
   // 全局未捕获异常：框架层与平台层（root isolate）都落入文件日志。
   FlutterError.onError = (details) {
@@ -174,6 +177,7 @@ Future<void> main() async {
       challengeVerifier: challengeVerifier,
       power: power,
       updater: updater,
+      mirrorLatency: mirrorLatency,
       trayManager: trayManager,
     ),
   );

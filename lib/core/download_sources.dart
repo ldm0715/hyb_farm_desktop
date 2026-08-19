@@ -49,8 +49,7 @@ class DownloadMirror {
 
   /// 前缀 + 完整官方 URL（官方 URL 原样拼接、不编码），归一尾部 `/`。
   String buildUrl(String official) {
-    final base = prefix.endsWith('/') ? prefix : '$prefix/';
-    return '$base$official';
+    return '${_trailingSlash(prefix)}$official';
   }
 
   Map<String, dynamic> toJson() => {
@@ -87,6 +86,7 @@ class DownloadCandidate {
     required this.sourceId,
     required this.sourceName,
     required this.isOfficial,
+    this.mirrorPrefix,
   });
 
   final String url;
@@ -99,6 +99,10 @@ class DownloadCandidate {
 
   /// 是否官方源（官方 URL 直连）。
   final bool isOfficial;
+
+  /// 镜像前缀（**带尾 `/`**）。null 表示官方源；非空时用它拼接同源的
+  /// 校验清单 URL（见 [buildCandidateSourceUrl]），保证镜像下载全程不碰官方 GitHub。
+  final String? mirrorPrefix;
 }
 
 /// 下载源取值：`official` / `auto` / `mirror:<id>`。
@@ -181,6 +185,26 @@ String _normalizePrefix(String p) {
   return s;
 }
 
+/// 归一为带单个尾 `/` 的前缀（拼接 URL 用）。
+String _trailingSlash(String p) => p.endsWith('/') ? p : '$p/';
+
+/// 候选同源拼接：镜像候选在官方 URL 前加前缀，官方候选原样返回。
+///
+/// 用于让校验清单与安装包从同一来源拉取（镜像下载全程不碰官方 GitHub）。
+String buildCandidateSourceUrl(DownloadCandidate c, String officialUrl) =>
+    c.mirrorPrefix == null ? officialUrl : '${c.mirrorPrefix}$officialUrl';
+
+/// 镜像测速延迟分段文案（毫秒）。
+///
+/// `<=300` 优秀、`<=1000` 良好、`<=3000` 一般、其余较慢。不可达/HTTP 异常由
+/// `MirrorSpeedResult` 单独判定，不走本函数。
+String describeMirrorLatencyMs(int ms) {
+  if (ms <= 300) return '优秀';
+  if (ms <= 1000) return '良好';
+  if (ms <= 3000) return '一般';
+  return '较慢';
+}
+
 /// 解析下载候选列表。
 ///
 /// - `official` / 未知 / 空 / 损坏 → `[官方候选]`
@@ -211,6 +235,7 @@ List<DownloadCandidate> resolveDownloadCandidates(
             sourceId: m.id,
             sourceName: m.name,
             isOfficial: false,
+            mirrorPrefix: _trailingSlash(m.prefix),
           ),
     ];
     list.add(officialCandidate());
@@ -229,6 +254,7 @@ List<DownloadCandidate> resolveDownloadCandidates(
           sourceId: m.id,
           sourceName: m.name,
           isOfficial: false,
+          mirrorPrefix: _trailingSlash(m.prefix),
         ),
       ];
     }

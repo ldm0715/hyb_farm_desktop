@@ -205,6 +205,34 @@ String? _parseChecksum(String text, String? assetName) {
 String updatesDirFor(String supportRoot) =>
     '$supportRoot${Platform.pathSeparator}$kUpdatesDirName';
 
+/// 单个镜像测速结果：可达性 + 首字节耗时 + 是否返回可用响应。
+class MirrorSpeedResult {
+  const MirrorSpeedResult({
+    required this.reachable,
+    this.latencyMs,
+    this.usable = false,
+  });
+
+  /// 网络层是否可达（收到了 HTTP 响应）。
+  final bool reachable;
+
+  /// 首字节耗时（毫秒）；不可达时为 null。
+  final int? latencyMs;
+
+  /// 是否返回了可用成功响应（2xx/3xx）。测安装包 URL 时 4xx/5xx 视为不可用；
+  /// 测镜像前缀根时任何响应都算可达（根路径可能按设计返回 403）。
+  final bool usable;
+
+  /// 展示文本：不可达 / 异常（HTTP 非成功）/ `X ms · 分段文案`。均不可用时为 null。
+  String? get label {
+    if (!reachable) return '不可达';
+    if (!usable) return '异常';
+    final ms = latencyMs;
+    if (ms == null) return null;
+    return '$ms ms · ${describeMirrorLatencyMs(ms)}';
+  }
+}
+
 class UpdateService {
   UpdateService({
     Dio? dio,
@@ -287,11 +315,9 @@ class UpdateService {
 
     final candidates = resolveDownloadCandidates(official, source, mirrors);
 
-    // 第三方来源必须有可信校验清单；清单始终从官方 URL 获取，绝不走镜像。
-    String? expectedSha256;
-    if (info.checksumUrl != null && info.checksumUrl!.isNotEmpty) {
-      expectedSha256 = await _fetchExpectedSha256(info, cancelToken);
-    } else if (usesThirdPartyMirror(candidates)) {
+    // 无校验清单时：官方源允许基础校验（MZ 头 + 大小），第三方镜像一律拒绝——无法安全校验。
+    final hasChecksum = info.checksumUrl != null && info.checksumUrl!.isNotEmpty;
+    if (!hasChecksum && usesThirdPartyMirror(candidates)) {
       throw const FormatException('该版本无校验清单，无法安全使用第三方镜像，请改用官方源');
     }
 
@@ -309,6 +335,39 @@ class UpdateService {
         'source': c.sourceId,
         'url': _sanitizeUrlForLog(c.url),
       });
+
+      // 校验清单与安装包同源拉取：镜像候选走镜像前缀、官方候选走官方 URL，镜像流程全程
+      // 不碰官方 GitHub（墙内直连 github.com 会超时）。拉取失败（含取消）不进入下载：
+      // auto 跳过本候选、显式镜像直接失败，**绝不无校验下载第三方内容**。
+      String? expectedSha256;
+      if (hasChecksum) {
+        final checksumUrl = buildCandidateSourceUrl(c, info.checksumUrl!);
+        try {
+          expectedSha256 = await _fetchSha256(
+            checksumUrl,
+            info.installerName,
+            cancelToken,
+          );
+        } on DioException catch (e) {
+          if (e.type == DioExceptionType.cancel) rethrow;
+          _deleteQuietly(partPath);
+          lastError = FormatException('来源「${c.sourceName}」无法提供校验清单');
+          AppLog.w('Update', '校验清单获取失败，跳过该候选', {
+            'source': c.sourceId,
+            'error': e.message ?? e.type.name,
+          });
+          continue;
+        } catch (e) {
+          _deleteQuietly(partPath);
+          lastError = FormatException('来源「${c.sourceName}」无法提供校验清单');
+          AppLog.w('Update', '校验清单获取失败，跳过该候选', {
+            'source': c.sourceId,
+            'error': e.toString(),
+          });
+          continue;
+        }
+      }
+
       try {
         await _dio.download(
           c.url,
@@ -354,12 +413,16 @@ class UpdateService {
     return finalPath;
   }
 
-  /// 从官方渠道拉取 `-SHA256.txt` 并解析出安装包对应的期望哈希（小写 64 位 hex）。
-  Future<String?> _fetchExpectedSha256(
-    UpdateInfo info,
+  /// 从给定 URL 拉取 `-SHA256.txt` 并解析出安装包对应的期望哈希（小写 64 位 hex）。
+  ///
+  /// URL 由调用方按候选同源解析（官方候选走官方 URL、镜像候选走镜像前缀），本方法
+  /// 不关心来源、只做拉取与严格解析。失败抛异常（`FormatException`/`DioException`），
+  /// 由调用方决定跳过候选（取消类型必须 rethrow）。
+  Future<String?> _fetchSha256(
+    String url,
+    String? installerName,
     CancelToken? cancelToken,
   ) async {
-    final url = info.checksumUrl!;
     final res = await _dio.get<List<int>>(
       url,
       cancelToken: cancelToken,
@@ -373,7 +436,7 @@ class UpdateService {
       throw const FormatException('校验清单异常');
     }
     final text = utf8.decode(bytes, allowMalformed: true);
-    return _parseChecksum(text, info.installerName);
+    return _parseChecksum(text, installerName);
   }
 
   /// 校验已下载的 `.part`：基础检查 +（可选）SHA256 比对。返回 null 表示通过，否则错误文案。
@@ -405,6 +468,47 @@ class UpdateService {
       }
     } catch (e) {
       AppLog.w('Update', '清理安装包失败', {'error': e.toString()});
+    }
+  }
+
+  /// 镜像测速：对「最新版本安装包经该镜像的 URL」（缺省用镜像前缀根）发 HEAD，
+  /// 测量首字节耗时并判可达/可用。任何 HTTP 响应都算可达（记录延迟）；网络层失败算
+  /// 不可达。HTTP 4xx/5xx 判定不可用（不显示为「优秀/良好」），见 [MirrorSpeedResult.usable]。
+  Future<MirrorSpeedResult> testMirrorLatency(
+    DownloadMirror mirror, {
+    String? installerUrl,
+  }) async {
+    final usingInstaller = installerUrl != null && installerUrl.isNotEmpty;
+    final testUrl =
+        usingInstaller ? mirror.buildUrl(installerUrl) : mirror.prefix;
+    final sw = Stopwatch()..start();
+    try {
+      final res = await _dio.head<dynamic>(
+        testUrl,
+        options: Options(
+          receiveTimeout: kRequestTimeout,
+          // 任何状态都返回（不抛 badResponse），由 usable 判定 4xx/5xx 不可用。
+          validateStatus: (_) => true,
+        ),
+      );
+      final code = res.statusCode;
+      return MirrorSpeedResult(
+        reachable: true,
+        latencyMs: sw.elapsedMilliseconds,
+        usable: !usingInstaller || (code != null && code >= 200 && code < 400),
+      );
+    } on DioException catch (e) {
+      AppLog.w('Update', '镜像测速失败', {
+        'mirror': mirror.name,
+        'type': e.type.name,
+      });
+      return const MirrorSpeedResult(reachable: false, usable: false);
+    } catch (e) {
+      AppLog.w('Update', '镜像测速异常', {
+        'mirror': mirror.name,
+        'error': e.toString(),
+      });
+      return const MirrorSpeedResult(reachable: false, usable: false);
     }
   }
 }

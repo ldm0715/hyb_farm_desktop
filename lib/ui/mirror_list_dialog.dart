@@ -7,8 +7,11 @@ library;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:hyb_farm_desktop/core/download_sources.dart';
+import 'package:hyb_farm_desktop/services/mirror_latency_store.dart';
+import 'package:hyb_farm_desktop/services/update_service.dart';
 import 'package:hyb_farm_desktop/state/settings_state.dart';
 import 'package:hyb_farm_desktop/theme/farm_theme.dart';
+import 'package:hyb_farm_desktop/ui/widgets/mirror_latency_badge.dart';
 
 /// 风险确认对话框：返回是否接受。
 Future<bool> showMirrorRiskDialog(BuildContext context) {
@@ -86,10 +89,17 @@ class _MirrorListDialogState extends State<_MirrorListDialog> {
   void initState() {
     super.initState();
     _mirrors = List.of(context.read<SettingsState>().downloadMirrors);
+    // 打开即测速（用最新版本地址）；Store 未注册（测试环境）时安全跳过。
+    final store = context.read<MirrorLatencyStore?>();
+    if (store != null) {
+      Future.microtask(() => store.refreshIfStale(_mirrors));
+    }
   }
 
   void _writeBack() {
     context.read<SettingsState>().downloadMirrors = _mirrors;
+    // 镜像增删/排序/启停/prefix 修改后清测速缓存，避免展示旧列表的过期延迟。
+    context.read<MirrorLatencyStore?>()?.invalidate();
   }
 
   void _toggle(int index, bool value) {
@@ -177,6 +187,8 @@ class _MirrorListDialogState extends State<_MirrorListDialog> {
   @override
   Widget build(BuildContext context) {
     final colors = FarmColorScheme.of(context);
+    final store = context.watch<MirrorLatencyStore?>();
+    final testing = store?.testing ?? false;
     return AlertDialog(
       title: const Text('第三方下载镜像'),
       content: SizedBox(
@@ -212,6 +224,8 @@ class _MirrorListDialogState extends State<_MirrorListDialog> {
                           key: ValueKey(m.id),
                           index: i,
                           mirror: m,
+                          result: store?.resultFor(m.id),
+                          testing: testing,
                           onToggle: (v) => _toggle(i, v),
                           onEdit: m.builtIn ? null : () => _edit(m),
                           onDelete: m.builtIn ? null : () => _delete(m),
@@ -227,6 +241,12 @@ class _MirrorListDialogState extends State<_MirrorListDialog> {
                     onPressed: _add,
                     child: const Text('添加镜像'),
                   ),
+                ),
+                const SizedBox(width: FarmSpacing.xs),
+                TextButton(
+                  onPressed: () =>
+                      context.read<MirrorLatencyStore?>()?.refresh(_mirrors),
+                  child: const Text('重新测速'),
                 ),
                 const SizedBox(width: FarmSpacing.xs),
                 TextButton(
@@ -254,6 +274,8 @@ class _MirrorRow extends StatelessWidget {
     required this.index,
     required this.mirror,
     required this.onToggle,
+    required this.result,
+    required this.testing,
     this.onEdit,
     this.onDelete,
   });
@@ -263,6 +285,12 @@ class _MirrorRow extends StatelessWidget {
   final ValueChanged<bool> onToggle;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
+
+  /// 该镜像的最新测速结果；null 表示尚无结果。
+  final MirrorSpeedResult? result;
+
+  /// Store 是否正在测速。
+  final bool testing;
 
   @override
   Widget build(BuildContext context) {
@@ -303,10 +331,20 @@ class _MirrorRow extends StatelessWidget {
           ],
         ],
       ),
-      subtitle: Text(
-        mirror.prefix,
-        overflow: TextOverflow.ellipsis,
-        style: FarmTextStyles.monoText.copyWith(color: colors.textSecondary),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            mirror.prefix,
+            overflow: TextOverflow.ellipsis,
+            style: FarmTextStyles.monoText.copyWith(color: colors.textSecondary),
+          ),
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MirrorLatencyBadge(result: result, testing: testing),
+          ),
+        ],
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,

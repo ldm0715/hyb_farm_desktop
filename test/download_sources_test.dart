@@ -85,6 +85,7 @@ void main() {
       expect(c.first.url, official);
       expect(c.first.isOfficial, isTrue);
       expect(c.first.sourceId, kDownloadSourceOfficial);
+      expect(c.first.mirrorPrefix, isNull);
     });
 
     test('auto → 启用镜像按序 + 官方兜底', () {
@@ -93,8 +94,10 @@ void main() {
       expect(c[0].url, 'https://m1/$official');
       expect(c[0].isOfficial, isFalse);
       expect(c[0].sourceName, '镜像1');
+      expect(c[0].mirrorPrefix, 'https://m1/');
       expect(c[1].url, official);
       expect(c[1].isOfficial, isTrue);
+      expect(c[1].mirrorPrefix, isNull);
     });
 
     test('指定启用镜像 → 仅该镜像候选', () {
@@ -106,6 +109,7 @@ void main() {
       expect(c.length, 1);
       expect(c.first.url, 'https://m1/$official');
       expect(c.first.isOfficial, isFalse);
+      expect(c.first.mirrorPrefix, 'https://m1/');
     });
 
     test('指定停用镜像 → 回落官方', () {
@@ -219,6 +223,47 @@ void main() {
         ),
         isTrue,
       );
+    });
+  });
+
+  group('buildCandidateSourceUrl', () {
+    const official =
+        'https://github.com/a/b/releases/download/v1/x.exe';
+    const checksumUrl =
+        'https://github.com/a/b/releases/download/v1/x-SHA256.txt';
+
+    test('官方候选原样返回官方 URL', () {
+      const c = DownloadCandidate(
+        url: official,
+        sourceId: kDownloadSourceOfficial,
+        sourceName: '官方源',
+        isOfficial: true,
+      );
+      expect(buildCandidateSourceUrl(c, checksumUrl), checksumUrl);
+    });
+
+    test('镜像候选在官方 URL 前加归一前缀', () {
+      final c = resolveDownloadCandidates(
+        official,
+        mirrorSource('m1'),
+        const [
+          DownloadMirror(id: 'm1', name: '镜像1', prefix: 'https://m1'),
+        ],
+      ).first;
+      expect(buildCandidateSourceUrl(c, checksumUrl), 'https://m1/$checksumUrl');
+    });
+  });
+
+  group('describeMirrorLatencyMs', () {
+    test('分段边界', () {
+      expect(describeMirrorLatencyMs(0), '优秀');
+      expect(describeMirrorLatencyMs(300), '优秀');
+      expect(describeMirrorLatencyMs(301), '良好');
+      expect(describeMirrorLatencyMs(1000), '良好');
+      expect(describeMirrorLatencyMs(1001), '一般');
+      expect(describeMirrorLatencyMs(3000), '一般');
+      expect(describeMirrorLatencyMs(3001), '较慢');
+      expect(describeMirrorLatencyMs(99999), '较慢');
     });
   });
 
